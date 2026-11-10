@@ -325,9 +325,6 @@ Dialog and DropdownMenu.
   - The rich text editor's link form, a dialog popover in a published package.
   - The `LayerSamePress` story and Popover's own tests.
 
-FR1 gap: `usePopover` anchors only to the element `triggerRef` receives, with
-no separate anchor and no function anchor; Popover's `anchorRef` that names an
-element holding no button warns in development and never anchors.
 FR7 gap: an anchor scrolled out of a scrolling panel leaves the surface held
 over unrelated content.
 FR9 gap: outside presses close the popover through native light dismiss, which
@@ -351,7 +348,7 @@ the body.
 | ---------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | FR1, FR23  | `PopoverAnchor.test.tsx`                                              | `anchor` with a trigger; with no trigger; Popover `anchorRef`                                                          | ARIA or a handler on the anchor, or the trigger losing ARIA, fails                                                                                           |
 | FR2, FR5   | `PopoverAnchor.test.tsx`                                              | A `div`, a table cell, an `<svg>` element; a trigger-less popover opened by `show()` and dismissed                     | A non-button anchor that warns or does not anchor, or a trigger-less dismissal without `onHide`, fails                                                       |
-| FR3, FR6   | `PopoverAnchor.test.tsx` and a real-browser interaction spec          | A new function passed while open; anchor removed and re-added; function returning `null` at open                       | A remount, a close, a focus move, or a visible surface without an anchor fails                                                                               |
+| FR3, FR6   | `PopoverAnchor.test.tsx`; real-browser evidence gap                   | A new function passed while open; anchor removed and re-added; function returning `null` at open                       | A remount, a close, a focus move, or a visible surface without an anchor fails                                                                               |
 | FR7, FR8   | `PopoverAnchorOutOfView.test.tsx` and a real-browser interaction spec | Anchor clipped by a panel, by the viewport, removed; `stay` and `hideWhileOutOfView`                                   | A dismissal on hide, a hidden surface that takes pointer input, or a layout read in a scroll frame fails                                                     |
 | FR9–FR11   | `PopoverOutsidePress.test.tsx` and a real-browser spec                | Veto and no veto; press on the anchor and on the trigger; a touch pan; `hasLightDismiss: false`; Escape                | A vetoed press that closes, a reported pan, a native event on the callback, or a callback for a non-outside close fails                                      |
 | FR12–FR16  | `useFocusTrap.test.tsx`, `Popover.test.tsx` and a real-browser spec   | Modal and non-modal; Tab at each edge and from the anchor; Tab from outside; role `none`; Escape in and out; the sheet | A non-modal popover that holds Tab, a modal one that leaks it (FR14's role-neutral popups excepted), `aria-modal` on a non-modal one, or a modal sheet fails |
