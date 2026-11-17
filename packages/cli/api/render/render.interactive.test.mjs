@@ -401,6 +401,70 @@ export default function Page() {
     expect(read('pictured-back/pictured.tsx')).not.toContain(CARRY_ATTR);
   }, 120_000);
 
+  it('keeps an image that a longer string or a <noscript> names, once the script draws the page', async () => {
+    put(
+      'src/shapes/photo.png',
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64'),
+    );
+    put(
+      'src/shapes/page.tsx',
+      `export default function Page() {
+  return (
+    <main>
+      <img src="./photo.png" alt="Plain" />
+      <div data-k="inner" dangerouslySetInnerHTML={{__html: '<img src="./photo.png" alt="Inner">'}} />
+      <div data-k="css" style={{backgroundImage: 'url("./photo.png")', width: 4, height: 4}} />
+      <div data-k="bare" style={{backgroundImage: 'url(./photo.png)', width: 4, height: 4}} />
+      <noscript><img src="./photo.png" alt="Fallback" /></noscript>
+    </main>
+  );
+}
+`,
+    );
+    put(
+      'src/shapes/only-noscript.tsx',
+      `const PATH = './photo.png';
+export default function Page() {
+  return (
+    <main>
+      <noscript><img src={PATH} alt="Fallback" /></noscript>
+      <p>{typeof document === 'undefined' ? '' : <img src={PATH} alt="Drawn" />}</p>
+    </main>
+  );
+}
+`,
+    );
+    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html']]) {
+      await render(page, {cwd: dir, out});
+    }
+    /** @param {string} file */
+    const drawn = async file => {
+      const dom = new JSDOM(read(file), {runScripts: 'dangerously', pretendToBeVisual: true});
+      await new Promise(resolve => dom.window.setTimeout(resolve, 100));
+      const root = /** @type {Element} */ (dom.window.document.getElementById(ROOT_ID));
+      const out = {
+        plain: root.querySelector('img[alt="Plain"]')?.getAttribute('src'),
+        inner: root.querySelector('[data-k="inner"] img')?.getAttribute('src'),
+        css: root.querySelector('[data-k="css"]')?.getAttribute('style'),
+        bare: root.querySelector('[data-k="bare"]')?.getAttribute('style'),
+        drawn: root.querySelector('img[alt="Drawn"]')?.getAttribute('src'),
+      };
+      dom.window.close();
+      return out;
+    };
+    const shapes = await drawn('shapes.html');
+    expect(shapes.plain).toMatch(/^data:image\/png;base64,/);
+    expect(shapes.inner).toMatch(/^data:image\/png;base64,/);
+    expect(shapes.css).toMatch(/url\("?data:image\/png;base64,/);
+    expect(shapes.bare).toMatch(/url\("?data:image\/png;base64,/);
+    // Only the whole string "./photo.png" is read from the first paint.
+    const script = read('shapes.html').slice(read('shapes.html').lastIndexOf('-->\n<script>'));
+    expect(script).not.toMatch(/["'(]__astryxCarried\[/);
+    expect(script).toContain('__astryxCarried[0]');
+    const onlyNoscript = await drawn('only-noscript.html');
+    expect(onlyNoscript.drawn).toMatch(/^data:image\/png;base64,/);
+  }, 120_000);
+
   it("keeps the first paint when the page's script throws", async () => {
     put(
       'src/throws.tsx',

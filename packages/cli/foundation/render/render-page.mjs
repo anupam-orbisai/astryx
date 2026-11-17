@@ -42,6 +42,7 @@ import {carriedNameFor, embeddedPathProblem} from './embedded-files.mjs';
 import {scanHtml} from './html-reader.mjs';
 import {removeOnStop} from '../fs/stop-cleanup.mjs';
 import {aliasOnly, assetRefsOf} from './embedded-imports.mjs';
+import {babelParser} from '../runtime/lazy-dependencies.mjs';
 import {isServedPackage, resolveServed} from './served-packages.mjs';
 import {CHART_CSS} from './charts.mjs';
 import {HOST_EXIT} from './host-exit.mjs';
@@ -741,12 +742,14 @@ const CARRIED_PRELUDE =
  * The page's script with each string the markup's rewrite replaced (an
  * image's `src`, `poster` or `srcset`, as the page wrote it) read from the
  * markup, which carries the same data, so the page the script draws shows
- * what the first paint showed and the file holds that data once. Only a
- * quoted string that is exactly that value changes, never a longer string
- * that holds it. A value no first-paint element carries (an image the page
- * shows only later), a string that names an object key, or a template a tag
- * reads takes the data itself; a script that would not parse with the reads
- * takes the data for every value.
+ * what the first paint showed and the file holds that data once. A read
+ * replaces only a whole string token of the script whose value is exactly
+ * that path, found with a JavaScript parser. Every other place the path
+ * appears keeps the data itself: a longer string that holds it (inner HTML,
+ * a CSS `url()`), a value no first-paint element carries (an image the page
+ * shows only later), an object key, or a template a tag reads. A script the
+ * parser cannot read, or that would not parse with the reads, keeps the data
+ * everywhere.
  * @param {string} script
  * @param {Map<string, string>} rewrites
  * @param {Set<string>} carried the values the first paint numbers
@@ -754,14 +757,82 @@ const CARRIED_PRELUDE =
  */
 export function withCarriedPaths(script, rewrites, carried) {
   const inline = replaceCarried(script, rewrites, () => null);
-  if (carried.size === 0) return inline;
-  const read = CARRIED_PRELUDE + replaceCarried(script, rewrites, (i, was) => (carried.has(was) ? `${CARRIED_VALUES}[${i}]` : null));
+  const tokens = carriedTokens(script, rewrites, carried);
+  if (tokens.length === 0) return inline;
+  // Each token to read becomes a mark no script holds, so the text pass
+  // below writes the data everywhere else; then each mark becomes its read.
+  let marked = '';
+  let at = 0;
+  for (const token of tokens) {
+    marked += `${script.slice(at, token.start)}\u0000${token.index}\u0000`;
+    at = token.end;
+  }
+  marked += script.slice(at);
+  const read =
+    CARRIED_PRELUDE +
+    replaceCarried(marked, rewrites, () => null).replace(/\u0000(\d+)\u0000/g, (_, i, offset, all) =>
+      `${/[\w$]/.test(all[offset - 1] ?? '') ? ' ' : ''}${CARRIED_VALUES}[${i}]`,
+    );
   try {
     new vm.Script(read);
     return read;
   } catch {
     return inline;
   }
+}
+
+/**
+ * The string tokens of the script whose value is exactly a path the first
+ * paint carries, where a read can stand: not an object key, not a template a
+ * tag reads, not text the page shows (`children`). In script order.
+ * @param {string} script
+ * @param {Map<string, string>} rewrites
+ * @param {Set<string>} carried
+ * @returns {{start: number, end: number, index: number}[]}
+ */
+function carriedTokens(script, rewrites, carried) {
+  /** @type {Map<string, number>} */
+  const indexOf = new Map();
+  let index = -1;
+  for (const [was] of rewrites) {
+    index += 1;
+    if (!carried.has(was) || /["'`\\\n]/.test(was)) continue;
+    if (['"', "'", '`'].some(q => script.includes(`${q}${was}${q}`))) indexOf.set(was, index);
+  }
+  if (indexOf.size === 0) return [];
+  /** @type {any} */
+  let ast;
+  try {
+    ast = babelParser().parse(script, {sourceType: 'script', errorRecovery: false});
+  } catch {
+    return [];
+  }
+  /** @type {{start: number, end: number, index: number}[]} */
+  const found = [];
+  /** @param {any} node @param {any} parent */
+  const visit = (node, parent) => {
+    if (node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child, parent);
+      return;
+    }
+    if (typeof node.type !== 'string') return;
+    /** @type {string | undefined} */
+    let value;
+    if (node.type === 'StringLiteral') value = node.value;
+    else if (node.type === 'TemplateLiteral' && node.expressions.length === 0 && parent?.type !== 'TaggedTemplateExpression') value = node.quasis[0]?.value?.cooked;
+    if (value !== undefined && indexOf.has(value)) {
+      const key = (parent?.type === 'ObjectProperty' || parent?.type === 'ObjectMethod' || parent?.type === 'ClassProperty') && parent.key === node;
+      const shown = parent?.type === 'ObjectProperty' && parent.value === node && !parent.computed && (parent.key?.name ?? parent.key?.value) === 'children';
+      if (!key && !shown) found.push({start: node.start, end: node.end, index: /** @type {number} */ (indexOf.get(value))});
+    }
+    for (const k of Object.keys(node)) {
+      if (k === 'loc' || k === 'start' || k === 'end' || k === 'extra' || k === 'leadingComments' || k === 'trailingComments') continue;
+      visit(node[k], node);
+    }
+  };
+  visit(ast.program, null);
+  return found.sort((a, b) => a.start - b.start);
 }
 
 /**
@@ -988,6 +1059,24 @@ function inlineAssets(text, kind, ctx) {
 }
 
 /**
+ * Where `text` holds <noscript> or <template> content, as [start, end] pairs.
+ * @param {string} text
+ * @returns {[number, number][]}
+ */
+function unread(text) {
+  if (text === unreadOf.text) return unreadOf.ranges;
+  /** @type {[number, number][]} */
+  const ranges = [];
+  for (const m of text.matchAll(/<(noscript|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi)) ranges.push([m.index, m.index + m[0].length]);
+  unreadOf.text = text;
+  unreadOf.ranges = ranges;
+  return ranges;
+}
+
+/** The last text {@link unread} read: one markup pass asks for it per attribute. */
+const unreadOf = {text: '', ranges: /** @type {[number, number][]} */ ([])};
+
+/**
  * Each reference to a file in markup (`src`, `poster`, `srcset`, and `url()`
  * in a `style` attribute) or in CSS (`url()`), replaced by what `resolve`
  * gives for it, or kept when it gives null.
@@ -1006,11 +1095,16 @@ function mapAssetRefs(text, kind, resolve, rewrites, marked) {
    * @param {string} attr
    * @param {string} was
    * @param {string} now
+   * @param {number} at where the attribute is in `text`
+   * @param {string} text the markup it is in
    */
-  const carry = (attr, was, now) => {
+  const carry = (attr, was, now, at, text) => {
     if (!rewrites) return '';
     if (!rewrites.has(was)) rewrites.set(was, now);
-    if (!marked) return '';
+    // With scripts on, a browser reads <noscript> as text and keeps
+    // <template> out of the document: an element there carries nothing the
+    // script can read.
+    if (!marked || unread(text).some(([from, to]) => at > from && at < to)) return '';
     marked.add(was);
     return ` ${CARRY_ATTR}="${attr.toLowerCase()}:${[...rewrites.keys()].indexOf(was)}"`;
   };
@@ -1029,11 +1123,11 @@ function mapAssetRefs(text, kind, resolve, rewrites, marked) {
   return text
     // React writes `srcSet` as it is spelled in JSX; HTML reads attribute
     // names in any case.
-    .replace(/\s(src|poster)="([^"]*)"/gi, (whole, attr, ref) => {
+    .replace(/\s(src|poster)="([^"]*)"/gi, (whole, attr, ref, at, all) => {
       const uri = resolve(ref);
-      return uri ? ` ${attr}="${uri}"${carry(attr, decodeAttr(ref), uri)}` : whole;
+      return uri ? ` ${attr}="${uri}"${carry(attr, decodeAttr(ref), uri, at, all)}` : whole;
     })
-    .replace(/\s(srcset)="([^"]*)"/gi, (whole, attr, set) => {
+    .replace(/\s(srcset)="([^"]*)"/gi, (whole, attr, set, at, all) => {
       const written = decodeAttr(set);
       let carried = false;
       const candidates = parseSrcset(written).map(({url, descriptor}) => {
@@ -1043,7 +1137,7 @@ function mapAssetRefs(text, kind, resolve, rewrites, marked) {
       });
       if (!carried) return whole;
       const rewritten = formatSrcset(candidates);
-      return ` ${attr}="${rewritten.replace(/"/g, '&quot;')}"${carry(attr, written, rewritten)}`;
+      return ` ${attr}="${rewritten.replace(/"/g, '&quot;')}"${carry(attr, written, rewritten, at, all)}`;
     })
     .replace(/\sstyle="([^"]*)"/g, (whole, style) => {
       // The attribute holds escaped text: rewrite the CSS it means, then
