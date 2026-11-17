@@ -218,6 +218,71 @@ describe("a render, which carries the page's script", () => {
     dom.window.close();
   });
 
+  it('keeps a link to a place in the page inside the file, in a frame whose address is the viewer\u2019s', async () => {
+    put(
+      'src/places.tsx',
+      `import {useEffect, useState} from 'react';
+export default function Page() {
+  const [hash, setHash] = useState('none');
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash || 'top');
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  return (
+    <main>
+      <span id="big" />
+      <a href="#big">Big only</a>
+      <a href="#">All</a>
+      <a href="#own" onClick={e => { e.preventDefault(); setHash('handled'); }}>Own</a>
+      <p id="hash">{hash}</p>
+    </main>
+  );
+}
+`,
+    );
+    await render('src/places.tsx', {cwd: dir, out: 'places.html'});
+    // A frame given its document inline (srcdoc) has the viewer's address as
+    // its base, so a bare "#big" would navigate the frame to the viewer.
+    const file = read('places.html').replace(
+      '<head>',
+      '<head><base href="https://viewer.test/board">',
+    );
+    const dom = new JSDOM(file, {
+      url: 'about:srcdoc',
+      runScripts: 'dangerously',
+      pretendToBeVisual: true,
+    });
+    await new Promise(resolve => dom.window.setTimeout(resolve, 50));
+    const doc = dom.window.document;
+    const click = (/** @type {string} */ text) => {
+      const link = [...doc.querySelectorAll('a')].find(
+        a => a.textContent === text,
+      );
+      const event = new dom.window.MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      });
+      link?.dispatchEvent(event);
+      return event;
+    };
+    expect(click('Big only').defaultPrevented).toBe(true);
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.href).toBe('about:srcdoc#big');
+    expect(doc.getElementById('hash')?.textContent).toBe('#big');
+    click('All');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.href.startsWith('about:srcdoc')).toBe(true);
+    expect(dom.window.location.hash).toBe('');
+    // A link the page handles itself keeps its own way.
+    click('Own');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(doc.getElementById('hash')?.textContent).toBe('handled');
+    expect(dom.window.location.hash).toBe('');
+    dom.window.close();
+  }, 120_000);
+
   it('opens a link out of the file in a new tab, and submits a form itself, also on Enter', async () => {
     put(
       'src/form.tsx',

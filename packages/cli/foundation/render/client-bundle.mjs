@@ -36,7 +36,11 @@ export const LINK_OUT = /^(https?:|mailto:|tel:|\/\/)/i;
  * event: the file cancels the browser's own submission and fires the event
  * itself, since a frame that blocks form submission never fires it, and a
  * file has no server to send a form to; a form whose action is another
- * site's address submits as the browser submits it. Enter in a form's only text field
+ * site's address submits as the browser submits it. A link to a place in the
+ * page (`#id`) stays in the file: in a frame whose document is given inline
+ * (`srcdoc`), the address resolves against the viewer's own page, so the
+ * click would navigate the frame away; the file moves to the place instead,
+ * which also sets `:target` and fires `hashchange`, as in a browser tab. Enter in a form's only text field
  * submits a form with no submit button, as a browser does; with a button,
  * the browser clicks it.
  */
@@ -55,7 +59,20 @@ document.addEventListener('click', event => {
   if (event.defaultPrevented || !(event.target instanceof Element)) return;
   const link = event.target.closest('a[href]');
   if (link) {
-    if (!link.hasAttribute('target') && out.test(link.getAttribute('href').trim())) {
+    const href = link.getAttribute('href').trim();
+    if (
+      href.startsWith('#') &&
+      !link.hasAttribute('target') &&
+      !link.hasAttribute('download') &&
+      event.button === 0 &&
+      !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) &&
+      document.baseURI.split('#')[0] !== location.href.split('#')[0]
+    ) {
+      event.preventDefault();
+      location.hash = href.slice(1);
+      return;
+    }
+    if (!link.hasAttribute('target') && out.test(href)) {
       link.target = '_blank';
       link.rel = [...new Set([...link.rel.split(/\\s+/).filter(Boolean), 'noopener', 'noreferrer'])].join(' ');
     }
