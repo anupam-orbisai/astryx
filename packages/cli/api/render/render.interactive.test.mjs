@@ -422,6 +422,19 @@ export default function Page() {
 `,
     );
     put(
+      'src/shapes/nested-template.tsx',
+      `const PATH = './photo.png';
+export default function Page() {
+  return (
+    <main>
+      <div dangerouslySetInnerHTML={{__html: '<template><template><i>inner</i></template><img src="./photo.png" alt="Kept"></template>'}} />
+      <p>{typeof document === 'undefined' ? '' : <img src={PATH} alt="Drawn" />}</p>
+    </main>
+  );
+}
+`,
+    );
+    put(
       'src/shapes/only-noscript.tsx',
       `const PATH = './photo.png';
 export default function Page() {
@@ -434,7 +447,7 @@ export default function Page() {
 }
 `,
     );
-    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html']]) {
+    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html'], ['src/shapes/nested-template.tsx', 'nested-template.html']]) {
       await render(page, {cwd: dir, out});
     }
     /** @param {string} file */
@@ -463,6 +476,10 @@ export default function Page() {
     expect(script).toContain('__astryxCarried[0]');
     const onlyNoscript = await drawn('only-noscript.html');
     expect(onlyNoscript.drawn).toMatch(/^data:image\/png;base64,/);
+    // An image inside a <template> that holds another <template> carries
+    // nothing the script can read either.
+    const nested = await drawn('nested-template.html');
+    expect(nested.drawn).toMatch(/^data:image\/png;base64,/);
   }, 120_000);
 
   it("keeps the first paint when the page's script throws", async () => {

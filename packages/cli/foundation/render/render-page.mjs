@@ -1058,7 +1058,24 @@ function unread(text) {
   if (text === unreadOf.text) return unreadOf.ranges;
   /** @type {[number, number][]} */
   const ranges = [];
-  for (const m of text.matchAll(/<(noscript|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi)) ranges.push([m.index, m.index + m[0].length]);
+  // Each outermost <noscript> or <template> runs to its own close tag, past
+  // any nested in it.
+  /** @type {string[]} */
+  const open = [];
+  let start = 0;
+  for (const m of text.matchAll(/<(\/?)(noscript|template)\b[^>]*>/gi)) {
+    const name = m[2].toLowerCase();
+    if (!m[1]) {
+      if (open.length === 0) start = /** @type {number} */ (m.index);
+      open.push(name);
+      continue;
+    }
+    const at = open.lastIndexOf(name);
+    if (at === -1) continue;
+    open.length = at;
+    if (open.length === 0) ranges.push([start, /** @type {number} */ (m.index) + m[0].length]);
+  }
+  if (open.length > 0) ranges.push([start, text.length]);
   unreadOf.text = text;
   unreadOf.ranges = ranges;
   return ranges;
