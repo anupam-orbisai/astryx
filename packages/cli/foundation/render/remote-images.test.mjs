@@ -797,6 +797,46 @@ describe('a render with images from the web', () => {
     }
   }, 120_000);
 
+  it('reads a first-paint image the code also extends from the first paint, with the same empty fragment', async () => {
+    const dir = makeLinkedFixture('astryx-render-extend-carried-', [
+      'react',
+      'react-dom',
+    ]);
+    try {
+      const file = path.join(dir, 'page.jsx');
+      fs.writeFileSync(
+        file,
+        [
+          "import {useState} from 'react';",
+          "const hero = 'https://cdn.example.com/hero.png';",
+          'export default function Page() {',
+          '  const [open, setOpen] = useState(false);',
+          '  return <main><img src={hero} alt="Now" /><button onClick={() => setOpen(true)}>Show</button>{open && <img src={`${hero}?w=640`} alt="Later" />}</main>;',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      const {fetch} = fetchFrom({'https://cdn.example.com/hero.png': png()});
+      const page = await renderPage(file, {cwd: dir, remoteImages: {fetch}});
+      const data = `data:image/png;base64,${PNG.toString('base64')}`;
+      const script = page.html.slice(page.html.indexOf('<script>', page.html.indexOf('application/x-astryx-source')));
+      // The script holds no copy: it reads the first paint's, and adds the '#'.
+      expect(script).not.toContain(data);
+      expect(script).toContain('(__astryxCarried[0]+"#")');
+      const dom = new JSDOM(page.html, {runScripts: 'dangerously', pretendToBeVisual: true});
+      const settle = () => new Promise(resolve => dom.window.setTimeout(resolve, 100));
+      await settle();
+      const doc = dom.window.document;
+      expect(doc.querySelector(`#${ROOT_ID} img[alt="Now"]`)?.getAttribute('src')).toBe(`${data}#`);
+      /** @type {HTMLButtonElement} */ (doc.querySelector(`#${ROOT_ID} button`)).click();
+      await settle();
+      expect(doc.querySelector(`#${ROOT_ID} img[alt="Later"]`)?.getAttribute('src')).toBe(`${data}#?w=640`);
+      dom.window.close();
+    } finally {
+      removeLinkedFixture(dir);
+    }
+  }, 120_000);
+
   it('reads a srcSet address that holds commas whole, and leaves a srcSet it carried nothing from as written', async () => {
     const dir = makeLinkedFixture('astryx-render-srcset-commas-', [
       'react',

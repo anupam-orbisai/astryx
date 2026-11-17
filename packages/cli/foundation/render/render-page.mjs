@@ -769,10 +769,15 @@ export function withCarriedPaths(script, rewrites, carried) {
     at = token.end;
   }
   marked += script.slice(at);
+  // The script's copy of a carried https address ends in an empty fragment
+  // (`data:…#`), so code that extends the address still draws; a read keeps it.
+  const fragment = [...rewrites.values()].map(now => now.startsWith('data:') && now.endsWith('#'));
   const read =
     CARRIED_PRELUDE +
     inlineCarried(marked, rewrites).replace(/\uE000(\d+)\uE001/g, (_, i, offset, all) =>
-      `${/[\w$]/.test(all[offset - 1] ?? '') ? ' ' : ''}${CARRIED_VALUES}[${i}]`,
+      fragment[Number(i)]
+        ? `(${CARRIED_VALUES}[${i}]+"#")`
+        : `${/[\w$]/.test(all[offset - 1] ?? '') ? ' ' : ''}${CARRIED_VALUES}[${i}]`,
     );
   try {
     new vm.Script(read);
