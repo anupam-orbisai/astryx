@@ -24,6 +24,7 @@ import {fork, spawnSync} from 'node:child_process';
 import {builtinModules} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {formatSrcset, parseSrcset} from './srcset.mjs';
+import * as vm from 'node:vm';
 import postcss from 'postcss';
 import {
   assetDataUri,
@@ -717,27 +718,81 @@ export function linksOpenNewTabs(markup) {
 }
 
 /**
+ * The render's own attribute on a first-paint element whose `src`, `srcset`
+ * or `poster` it carries: each attribute with the number of its value
+ * (`src:0 srcset:1`), so the page's script reads the value there
+ * ({@link withCarriedPaths}). Only the file's markup has it, never the page's
+ * source.
+ */
+export const CARRY_ATTR = 'data-astryx-carried';
+
+/** The name the script reads the markup's carried values from. */
+const CARRIED_VALUES = '__astryxCarried';
+
+/**
+ * The script's first statement: each value the markup carries, read from the
+ * first paint by its number before the script draws the page again.
+ */
+const CARRIED_PRELUDE =
+  `var ${CARRIED_VALUES}=(()=>{const v=[];for(const e of document.querySelectorAll('[${CARRY_ATTR}]'))` +
+  `for(const c of e.getAttribute('${CARRY_ATTR}').split(' ')){const [a,i]=c.split(':');v[+i]??=e.getAttribute(a)}return v})();`;
+
+/**
  * The page's script with each string the markup's rewrite replaced (an
- * image's `src`, `poster` or `srcset`, as the page wrote it) written as the
- * same carried data, so the page the script draws shows what the first paint
- * showed. Only a quoted string that is exactly that value changes, never a
- * longer string that holds it.
+ * image's `src`, `poster` or `srcset`, as the page wrote it) read from the
+ * markup, which carries the same data, so the page the script draws shows
+ * what the first paint showed and the file holds that data once. Only a
+ * quoted string that is exactly that value changes, never a longer string
+ * that holds it. A value no first-paint element carries (an image the page
+ * shows only later), a string that names an object key, or a template a tag
+ * reads takes the data itself; a script that would not parse with the reads
+ * takes the data for every value.
  * @param {string} script
  * @param {Map<string, string>} rewrites
+ * @param {Set<string>} carried the values the first paint numbers
  * @returns {string}
  */
-export function withCarriedPaths(script, rewrites) {
+export function withCarriedPaths(script, rewrites, carried) {
+  const inline = replaceCarried(script, rewrites, () => null);
+  if (carried.size === 0) return inline;
+  const read = CARRIED_PRELUDE + replaceCarried(script, rewrites, (i, was) => (carried.has(was) ? `${CARRIED_VALUES}[${i}]` : null));
+  try {
+    new vm.Script(read);
+    return read;
+  } catch {
+    return inline;
+  }
+}
+
+/**
+ * @param {string} script
+ * @param {Map<string, string>} rewrites
+ * @param {(index: number, was: string) => string | null} reading the
+ *   expression that reads value `index` from the markup, or null to write
+ *   the value itself
+ */
+function replaceCarried(script, rewrites, reading) {
   let out = script;
+  let index = -1;
   for (const [was, now] of rewrites) {
+    index += 1;
     if (/["'`\\\n<]/.test(now) || /["'`\\\n]/.test(was)) continue;
     for (const quote of ['"', "'", '`']) {
       const literal = `${quote}${was}${quote}`;
-      // Text the page shows (`children: "./photo.png"`) stays as written.
       out = out
         .split(literal)
-        .map((part, i, parts) =>
-          i === parts.length - 1 ? part : /\bchildren:\s*$/.test(part) ? `${part}${literal}` : `${part}${quote}${now}${quote}`,
-        )
+        .map((part, i, parts) => {
+          if (i === parts.length - 1) return part;
+          // Text the page shows (`children: "./photo.png"`) stays as written.
+          if (/\bchildren:\s*$/.test(part)) return `${part}${literal}`;
+          // An object key, or a template a tag reads, cannot be a read.
+          const key = /[{,]\s*$/.test(part) && /^\s*:/.test(parts[i + 1]);
+          const tagged = quote === '`' && /[\w$)\]]$/.test(part);
+          const read = key || tagged ? null : reading(index, was);
+          if (read === null) return `${part}${quote}${now}${quote}`;
+          // Minified code writes a string right after a word (`return"…"`).
+          return `${part}${/[\w$]$/.test(part) ? ' ' : ''}${read}`;
+        })
         .join('');
     }
     // A CSS url() in a style the script sets (`backgroundImage:
@@ -860,11 +915,12 @@ export function assetRef(ref, at) {
  * link (`href`) loads nothing, so it is left alone.
  * @param {string} text markup or CSS
  * @param {'html' | 'css'} kind
- * @param {{dir: string, root: string, warnings: RenderWarning[], counted: Set<string>, localAssets: Set<string>, leaveLargeStyleAssets?: boolean, rewrites?: Map<string, string>, remote?: Map<string, import('./remote-images.mjs').RemoteImage>}} ctx
+ * @param {{dir: string, root: string, warnings: RenderWarning[], counted: Set<string>, localAssets: Set<string>, leaveLargeStyleAssets?: boolean, rewrites?: Map<string, string>, carried?: Set<string>, remote?: Map<string, import('./remote-images.mjs').RemoteImage>}} ctx
  *   `leaveLargeStyleAssets`: a stylesheet's file too large to inline is left
  *   as it is and named, as a missing one is, rather than refused;
  *   `rewrites`: each attribute value the markup's rewrite replaced, as the
- *   page wrote it, with what it became; `remote`: the remote images fetched
+ *   page wrote it, with what it became; `carried`: gets each one the markup
+ *   numbers for the page's script (none in a markup-only render); `remote`: the remote images fetched
  *   for this render, by the address the page wrote
  */
 function inlineAssets(text, kind, ctx) {
@@ -928,7 +984,7 @@ function inlineAssets(text, kind, ctx) {
     if (!clean.startsWith('/')) ctx.localAssets.add(found);
     return assetDataUri(found);
   };
-  return mapAssetRefs(text, kind, resolveRef, ctx.rewrites);
+  return mapAssetRefs(text, kind, resolveRef, ctx.rewrites, ctx.carried);
 }
 
 /**
@@ -940,8 +996,24 @@ function inlineAssets(text, kind, ctx) {
  * @param {(ref: string) => string | null} resolve
  * @param {Map<string, string>} [rewrites] gets each attribute value replaced,
  *   as the page wrote it, with what it became
+ * @param {Set<string>} [marked] number each replaced value in the markup
+ *   ({@link CARRY_ATTR}), so the page's script reads it there, and add it
+ *   to this set
  */
-function mapAssetRefs(text, kind, resolve, rewrites) {
+function mapAssetRefs(text, kind, resolve, rewrites, marked) {
+  /**
+   * Record a replaced value; the attribute that marks it, when marking.
+   * @param {string} attr
+   * @param {string} was
+   * @param {string} now
+   */
+  const carry = (attr, was, now) => {
+    if (!rewrites) return '';
+    if (!rewrites.has(was)) rewrites.set(was, now);
+    if (!marked) return '';
+    marked.add(was);
+    return ` ${CARRY_ATTR}="${attr.toLowerCase()}:${[...rewrites.keys()].indexOf(was)}"`;
+  };
   /**
    * @param {string} value
    * @param {boolean} [record] keep each rewrite, for a style the script sets
@@ -959,8 +1031,7 @@ function mapAssetRefs(text, kind, resolve, rewrites) {
     // names in any case.
     .replace(/\s(src|poster)="([^"]*)"/gi, (whole, attr, ref) => {
       const uri = resolve(ref);
-      if (uri) rewrites?.set(decodeAttr(ref), uri);
-      return uri ? ` ${attr}="${uri}"` : whole;
+      return uri ? ` ${attr}="${uri}"${carry(attr, decodeAttr(ref), uri)}` : whole;
     })
     .replace(/\s(srcset)="([^"]*)"/gi, (whole, attr, set) => {
       const written = decodeAttr(set);
@@ -972,14 +1043,19 @@ function mapAssetRefs(text, kind, resolve, rewrites) {
       });
       if (!carried) return whole;
       const rewritten = formatSrcset(candidates);
-      rewrites?.set(written, rewritten);
-      return ` ${attr}="${rewritten.replace(/"/g, '&quot;')}"`;
+      return ` ${attr}="${rewritten.replace(/"/g, '&quot;')}"${carry(attr, written, rewritten)}`;
     })
     .replace(/\sstyle="([^"]*)"/g, (whole, style) => {
       // The attribute holds escaped text: rewrite the CSS it means, then
       // escape it again, so a data: URI's quotes cannot end the attribute.
       const css = urls(decodeAttr(style), true);
       return ` style="${css.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`;
+    })
+    // An element with a carried `src` and `srcset` gets one attribute.
+    .replace(new RegExp(`<[^<>]*\\s${CARRY_ATTR}="[^"]*"[^<>]*\\s${CARRY_ATTR}="[^"]*"[^<>]*>`, 'g'), tag => {
+      const marks = [...tag.matchAll(new RegExp(`\\s${CARRY_ATTR}="([^"]*)"`, 'g'))].map(m => m[1]);
+      const kept = tag.replace(new RegExp(`\\s${CARRY_ATTR}="[^"]*"`, 'g'), '');
+      return kept.replace(/(\/?>)$/, ` ${CARRY_ATTR}="${marks.join(' ')}"$1`);
     });
 }
 
@@ -1185,6 +1261,9 @@ export async function renderPage(entry, options = {}) {
     localAssets: /** @type {Set<string>} */ (new Set()),
     leaveLargeStyleAssets: options.leaveLargeStyleAssets === true,
     rewrites: /** @type {Map<string, string>} */ (new Map()),
+    // The page's script reads the data the markup carries; a markup-only
+    // render has no script.
+    carried: options.markupOnly ? undefined : /** @type {Set<string>} */ (new Set()),
     remote: remote?.results,
   };
   /**
@@ -1369,7 +1448,7 @@ export async function renderPage(entry, options = {}) {
   for (const [was, now] of ctx.rewrites) {
     if (/^https:\/\/\S+$/i.test(was) && now.startsWith('data:') && !now.includes('#')) ctx.rewrites.set(was, `${now}#`);
   }
-  const drawn = script === null ? null : withCarriedPaths(script, ctx.rewrites);
+  const drawn = script === null ? null : withCarriedPaths(script, ctx.rewrites, ctx.carried ?? new Set());
   // The script draws what the markup does not show yet (a menu as it opens,
   // the next tab), so the rules every class name it holds needs stay too.
   const kept = script ? new Set([...used, ...(script.match(/[A-Za-z_][\w-]*/g) ?? [])]) : used;

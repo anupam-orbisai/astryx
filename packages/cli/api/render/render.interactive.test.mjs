@@ -25,7 +25,7 @@ import {
   ESBUILD_MISSING,
   findEsbuild,
 } from '../../foundation/render/esbuild-dependency.mjs';
-import {RenderError, renderPage} from '../../foundation/render/render-page.mjs';
+import {CARRY_ATTR, RenderError, renderPage} from '../../foundation/render/render-page.mjs';
 import {cliVersion} from '../../foundation/integrations/cli-peer-version.mjs';
 import {runCli} from '../../test-utils/run-cli.mjs';
 import {
@@ -372,7 +372,13 @@ export default function Page() {
 `,
     );
     await render('src/pictured.tsx', {cwd: dir, out: 'pictured.html'});
-    const dom = new JSDOM(read('pictured.html'), {
+    // The script reads the image from the first paint: the file carries it
+    // only where the markup shows it.
+    const html = read('pictured.html');
+    const pageScript = html.slice(html.lastIndexOf('<script>'));
+    expect(pageScript).not.toContain('data:image/png');
+    expect(html.split('data:image/png;base64,').length - 1).toBe(3);
+    const dom = new JSDOM(html, {
       runScripts: 'dangerously',
       pretendToBeVisual: true,
     });
@@ -386,7 +392,13 @@ export default function Page() {
     );
     // The script drew them: they are not the first paint's elements.
     expect(doc.getElementById(ROOT_ID)?.innerHTML).not.toContain('./photo.png');
+    expect(doc.getElementById(ROOT_ID)?.innerHTML).not.toContain(CARRY_ATTR);
     dom.window.close();
+    // The first paint's own attribute is the render's: the page comes back
+    // exactly, with no change reported.
+    const back = /** @type {any} */ (await render('pictured.html', {cwd: dir, reverse: true, out: 'pictured-back/pictured.tsx'}));
+    expect(back.data).toMatchObject({mode: 'embedded', exact: true, edited: false});
+    expect(read('pictured-back/pictured.tsx')).not.toContain(CARRY_ATTR);
   }, 120_000);
 
   it("keeps the first paint when the page's script throws", async () => {

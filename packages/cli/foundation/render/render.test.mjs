@@ -13,7 +13,7 @@ import {describe, expect, it} from 'vitest';
 import {classesIn, cutCss, layerOrderOf, requiredClasses} from './css-cut.mjs';
 import {RENDER_FORMAT, readSourceBlock, renderedHeadOf, renderedMarkupOf, sourceBlock} from './source-block.mjs';
 import {isAstryxMarkup, parseHtml} from './html-reader.mjs';
-import {renderPage, withCarriedPaths, withUncarriedImages} from './render-page.mjs';
+import {CARRY_ATTR, renderPage, withCarriedPaths, withUncarriedImages} from './render-page.mjs';
 import {carriedNameFor, embeddedPathProblem} from './embedded-files.mjs';
 import {makeLinkedFixture, removeLinkedFixture} from '../../test-utils/linked-fixture.mjs';
 
@@ -237,13 +237,24 @@ export default function Page() {
 });
 
 describe('withCarriedPaths', () => {
-  it('rewrites an image path the script names, and leaves text the page shows as written', () => {
+  it('reads an image path the script names from the markup, and leaves text the page shows as written', () => {
     const rewrites = new Map([['./photo.png', 'data:image/png;base64,AAAA']]);
-    expect(
-      withCarriedPaths(`a({src:"./photo.png",children:"./photo.png"});b('./photo.png');c({children: \`./photo.png\`})`, rewrites),
-    ).toBe(
-      `a({src:"data:image/png;base64,AAAA",children:"./photo.png"});b('data:image/png;base64,AAAA');c({children: \`./photo.png\`})`,
+    const script = withCarriedPaths(`a({src:"./photo.png",children:"./photo.png"});b('./photo.png');c({children: \`./photo.png\`})`, rewrites, new Set(rewrites.keys()));
+    expect(script).not.toContain('data:image/png');
+    expect(script.endsWith(`a({src:__astryxCarried[0],children:"./photo.png"});b(__astryxCarried[0]);c({children: \`./photo.png\`})`)).toBe(true);
+    expect(script).toContain(`'[${CARRY_ATTR}]'`);
+  });
+
+  it('writes the data itself where a read cannot go: an object key, a tagged template, a value the first paint does not carry, or a script that would not parse', () => {
+    const rewrites = new Map([['./photo.png', 'data:image/png;base64,AAAA']]);
+    const carried = new Set(rewrites.keys());
+    expect(withCarriedPaths('f("./photo.png")', rewrites, new Set())).toBe('f("data:image/png;base64,AAAA")');
+    expect(withCarriedPaths(`m={"./photo.png":1};f("./photo.png")`, rewrites, carried)).toMatch(
+      /m=\{"data:image\/png;base64,AAAA":1\};f\(__astryxCarried\[0\]\)$/,
     );
+    expect(withCarriedPaths('f=()=>tag`./photo.png`', rewrites, carried)).toMatch(/f=\(\)=>tag`data:image\/png;base64,AAAA`$/);
+    expect(withCarriedPaths('f=()=>{return"./photo.png"}', rewrites, carried)).toMatch(/f=\(\)=>\{return __astryxCarried\[0\]\}$/);
+    expect(withCarriedPaths('f("./photo.png"', rewrites, carried)).toBe('f("data:image/png;base64,AAAA"');
   });
 });
 
