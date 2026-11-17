@@ -759,18 +759,19 @@ export function withCarriedPaths(script, rewrites, carried) {
   const inline = inlineCarried(script, rewrites);
   const tokens = carriedTokens(script, rewrites, carried);
   if (tokens.length === 0) return inline;
-  // Each token to read becomes a mark no script holds, so the text pass
-  // below writes the data everywhere else; then each mark becomes its read.
+  // Each token to read becomes a mark no script holds (the script is built
+  // ASCII-only, so it never holds a raw private-use character), so the text
+  // pass below writes the data everywhere else; then each mark becomes its read.
   let marked = '';
   let at = 0;
   for (const token of tokens) {
-    marked += `${script.slice(at, token.start)}\u0000${token.index}\u0000`;
+    marked += `${script.slice(at, token.start)}\uE000${token.index}\uE001`;
     at = token.end;
   }
   marked += script.slice(at);
   const read =
     CARRIED_PRELUDE +
-    inlineCarried(marked, rewrites).replace(/\u0000(\d+)\u0000/g, (_, i, offset, all) =>
+    inlineCarried(marked, rewrites).replace(/\uE000(\d+)\uE001/g, (_, i, offset, all) =>
       `${/[\w$]/.test(all[offset - 1] ?? '') ? ' ' : ''}${CARRIED_VALUES}[${i}]`,
     );
   try {
