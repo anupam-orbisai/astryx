@@ -435,6 +435,20 @@ export default function Page() {
 `,
     );
     put(
+      'src/shapes/comment-textarea.tsx',
+      `const PATH = './photo.png';
+export default function Page() {
+  return (
+    <main>
+      <div dangerouslySetInnerHTML={{__html: '<!-- <img src="./photo.png" alt="Old"> -->'}} />
+      <div dangerouslySetInnerHTML={{__html: '<textarea><img src="./photo.png" alt="Text"></textarea>'}} />
+      <p>{typeof document === 'undefined' ? '' : <img src={PATH} alt="Drawn" />}</p>
+    </main>
+  );
+}
+`,
+    );
+    put(
       'src/shapes/only-noscript.tsx',
       `const PATH = './photo.png';
 export default function Page() {
@@ -447,7 +461,7 @@ export default function Page() {
 }
 `,
     );
-    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html'], ['src/shapes/nested-template.tsx', 'nested-template.html']]) {
+    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html'], ['src/shapes/nested-template.tsx', 'nested-template.html'], ['src/shapes/comment-textarea.tsx', 'comment-textarea.html']]) {
       await render(page, {cwd: dir, out});
     }
     /** @param {string} file */
@@ -480,6 +494,9 @@ export default function Page() {
     // nothing the script can read either.
     const nested = await drawn('nested-template.html');
     expect(nested.drawn).toMatch(/^data:image\/png;base64,/);
+    // Nor does one inside a comment or a <textarea>'s text.
+    const quoted = await drawn('comment-textarea.html');
+    expect(quoted.drawn).toMatch(/^data:image\/png;base64,/);
   }, 120_000);
 
   it("keeps the first paint when the page's script throws", async () => {

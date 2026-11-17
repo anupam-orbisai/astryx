@@ -1050,7 +1050,11 @@ function inlineAssets(text, kind, ctx) {
 }
 
 /**
- * Where `text` holds <noscript> or <template> content, as [start, end] pairs.
+ * Where `text` holds markup a browser running scripts never makes elements
+ * of, as [start, end] pairs: a comment, the text of a raw-text element
+ * (`<textarea>`, `<title>`, `<style>`, `<script>`), and each outermost
+ * `<noscript>` or `<template>`, which runs to its own close tag past any
+ * nested in it. The pieces are the HTML scanner's own.
  * @param {string} text
  * @returns {[number, number][]}
  */
@@ -1058,22 +1062,25 @@ function unread(text) {
   if (text === unreadOf.text) return unreadOf.ranges;
   /** @type {[number, number][]} */
   const ranges = [];
-  // Each outermost <noscript> or <template> runs to its own close tag, past
-  // any nested in it.
   /** @type {string[]} */
   const open = [];
   let start = 0;
-  for (const m of text.matchAll(/<(\/?)(noscript|template)\b[^>]*>/gi)) {
-    const name = m[2].toLowerCase();
-    if (!m[1]) {
-      if (open.length === 0) start = /** @type {number} */ (m.index);
-      open.push(name);
+  for (const piece of scanHtml(text)) {
+    if (open.length === 0 && (piece.kind === 'comment' || piece.kind === 'raw')) {
+      ranges.push([piece.start, piece.end]);
       continue;
     }
-    const at = open.lastIndexOf(name);
+    if ((piece.kind !== 'start' && piece.kind !== 'end') || (piece.tag !== 'noscript' && piece.tag !== 'template')) continue;
+    if (piece.kind === 'start') {
+      if (piece.selfClosing) continue;
+      if (open.length === 0) start = piece.start;
+      open.push(piece.tag);
+      continue;
+    }
+    const at = open.lastIndexOf(piece.tag);
     if (at === -1) continue;
     open.length = at;
-    if (open.length === 0) ranges.push([start, /** @type {number} */ (m.index) + m[0].length]);
+    if (open.length === 0) ranges.push([start, piece.end]);
   }
   if (open.length > 0) ranges.push([start, text.length]);
   unreadOf.text = text;
