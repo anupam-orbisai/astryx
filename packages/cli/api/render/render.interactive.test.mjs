@@ -232,7 +232,11 @@ export default function Page() {
   return (
     <main>
       <span id="big" />
+      <span id="café" />
+      <span id="100%" />
       <a href="#big">Big only</a>
+      <a href="#café">Café</a>
+      <a href="#100%">Hundred</a>
       <a href="#">All</a>
       <a href="#own" onClick={e => { e.preventDefault(); setHash('handled'); }}>Own</a>
       <p id="hash">{hash}</p>
@@ -279,6 +283,31 @@ export default function Page() {
     expect(click('Big only').defaultPrevented).toBe(true);
     expect(scrolled).toEqual(['big']);
     expect(dom.window.location.href).toBe('about:srcdoc#big');
+    // An id the address encodes, and one that is not encoded text, scroll
+    // again on a repeat click too.
+    /** @type {any} */ (doc.getElementById('café')).scrollIntoView = () =>
+      scrolled.push('café');
+    /** @type {any} */ (doc.getElementById('100%')).scrollIntoView = () =>
+      scrolled.push('100%');
+    click('Café');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.hash).toBe('#caf%C3%A9');
+    click('Café');
+    click('Hundred');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    click('Hundred');
+    expect(scrolled).toEqual(['big', 'café', '100%']);
+    click('Big only');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.hash).toBe('#big');
+    // A listener the page adds on the window after the file's script still
+    // cancels the move.
+    const cancel = (/** @type {Event} */ e) => e.preventDefault();
+    dom.window.addEventListener('click', cancel);
+    click('All');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.hash).toBe('#big');
+    dom.window.removeEventListener('click', cancel);
     // A handler the page adds on the document after the file's script still
     // cancels the move.
     const stop = (/** @type {Event} */ e) => e.preventDefault();

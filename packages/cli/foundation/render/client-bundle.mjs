@@ -72,9 +72,11 @@ document.addEventListener('click', event => {
   event.preventDefault();
   submit(button.form, button);
 });
-// On the window, after the page's own click handlers (on the document too),
-// so a page that handles the link itself cancels the move first.
-window.addEventListener('click', event => {
+// The move to a place is decided after every click listener the page has,
+// on the document or the window, even one it adds later: a capture listener
+// on the window, which runs first, adds a one-time listener for this click
+// that runs last, so a page that handles the link itself cancels the move.
+const moveToPlace = event => {
   if (event.defaultPrevented || !(event.target instanceof Element)) return;
   const link = event.target.closest('a[href]');
   if (!link) return;
@@ -88,16 +90,33 @@ window.addEventListener('click', event => {
     document.baseURI.split('#')[0] === location.href.split('#')[0]
   ) return;
   event.preventDefault();
-  const id = decodeURIComponent(href.slice(1));
-  if (location.hash.slice(1) !== href.slice(1)) {
-    location.hash = href.slice(1);
+  const hash = new URL(href, location.href).hash;
+  if (hash !== location.hash) {
+    location.hash = hash;
     return;
   }
   // The same place again: a browser scrolls there once more.
-  const place = id === '' || id.toLowerCase() === 'top' ? null : (document.getElementById(id) ?? document.getElementsByName(id)[0]);
-  if (place) place.scrollIntoView();
-  else if (id === '' || id.toLowerCase() === 'top') window.scrollTo(0, 0);
-});
+  let id = hash.slice(1);
+  try {
+    id = decodeURIComponent(id);
+  } catch {
+    // An id that is not percent-encoded text (\`#100%\`) is looked up as written.
+  }
+  if (id === '' || id.toLowerCase() === 'top') {
+    window.scrollTo(0, 0);
+    return;
+  }
+  (document.getElementById(id) ?? document.getElementsByName(id)[0])?.scrollIntoView();
+};
+window.addEventListener('click', event => {
+  if (event.target instanceof Element && event.target.closest('a[href^="#"]')) {
+    const last = () => {
+      window.removeEventListener('click', last);
+      moveToPlace(event);
+    };
+    window.addEventListener('click', last);
+  }
+}, true);
 document.addEventListener('keydown', event => {
   const field = event.target;
   if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing) return;
