@@ -76,7 +76,6 @@ document.addEventListener('click', event => {
 // on the document or the window, even one it adds later: a capture listener
 // on the window, which runs first, adds a one-time listener for this click
 // that runs last, so a page that handles the link itself cancels the move.
-const focusable = 'a[href],area[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),iframe,summary,[contenteditable=""],[contenteditable="true"]';
 const moveToPlace = event => {
   if (event.defaultPrevented || !(event.target instanceof Element)) return;
   const link = event.target.closest('a[href]');
@@ -90,33 +89,14 @@ const moveToPlace = event => {
     event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
     document.baseURI.split('#')[0] === location.href.split('#')[0]
   ) return;
+  // The browser moves to the place against the frame's own address, so it
+  // scrolls, sets :target, fires hashchange and moves focus as in a tab. The
+  // same place again is a navigation to the same address, which a browser
+  // also treats as a move to the place.
   event.preventDefault();
   const hash = new URL(href, location.href).hash;
-  let id = hash.slice(1);
-  try {
-    id = decodeURIComponent(id);
-  } catch {
-    // An id that is not percent-encoded text (\`#100%\`) is looked up as written.
-  }
-  const place = id === '' ? null : (document.getElementById(id) ?? document.getElementsByName(id)[0]);
-  // With no element to go to, \`#\` and \`#top\` mean the top of the document.
-  const top = !place && (id === '' || id.toLowerCase() === 'top');
   if (hash !== location.hash) location.hash = hash;
-  // The same place again: a browser scrolls there once more.
-  else if (place) place.scrollIntoView();
-  else if (top) window.scrollTo(0, 0);
-  // Focus as a browser does after a move to an element: the element itself
-  // when it takes focus, else the document, with the next Tab starting from
-  // the element. A move to no element leaves focus where it is.
-  if (!place) return;
-  if (place.hasAttribute('tabindex') || place.matches(focusable)) {
-    place.focus({preventScroll: true});
-    return;
-  }
-  place.setAttribute('tabindex', '-1');
-  place.focus({preventScroll: true});
-  place.blur();
-  place.removeAttribute('tabindex');
+  else location.replace(location.href);
 };
 window.addEventListener('click', event => {
   if (event.target instanceof Element && event.target.closest('a[href^="#"]')) {

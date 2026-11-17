@@ -234,10 +234,7 @@ export default function Page() {
       <span id="big" />
       <span id="café" />
       <span id="100%" />
-      <h2 id="notes" tabIndex={-1}>Notes</h2>
       <a href="#big">Big only</a>
-      <a href="#notes">Notes link</a>
-      <a href="#top">Back to top</a>
       <a href="#café">Café</a>
       <a href="#100%">Hundred</a>
       <a href="#">All</a>
@@ -280,45 +277,18 @@ export default function Page() {
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.href).toBe('about:srcdoc#big');
     expect(doc.getElementById('hash')?.textContent).toBe('#big');
-    // As in a browser, focus leaves the link for the document when the place
-    // takes no focus, and goes to the place itself when it does.
-    expect(doc.activeElement).toBe(doc.body);
-    expect(doc.getElementById('big')?.hasAttribute('tabindex')).toBe(false);
-    click('Notes link');
-    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
-    expect(doc.activeElement).toBe(doc.getElementById('notes'));
-    // A move to the top with no element named "top" leaves focus on the link.
-    let toTop = 0;
-    dom.window.scrollTo = /** @type {any} */ (() => toTop++);
-    click('Back to top');
-    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
-    click('Back to top');
-    expect(toTop).toBe(1);
-    expect(doc.activeElement?.textContent).toBe('Back to top');
-    click('Big only');
-    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
-    // The same link again scrolls to its place once more, as a browser does.
-    /** @type {string[]} */
-    const scrolled = [];
-    /** @type {any} */ (doc.getElementById('big')).scrollIntoView = () =>
-      scrolled.push('big');
+    // The same link again is a move to the same place, still inside the file.
     expect(click('Big only').defaultPrevented).toBe(true);
-    expect(scrolled).toEqual(['big']);
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.href).toBe('about:srcdoc#big');
-    // An id the address encodes, and one that is not encoded text, scroll
-    // again on a repeat click too.
-    /** @type {any} */ (doc.getElementById('café')).scrollIntoView = () =>
-      scrolled.push('café');
-    /** @type {any} */ (doc.getElementById('100%')).scrollIntoView = () =>
-      scrolled.push('100%');
+    // An id the address encodes, and one that is not encoded text.
     click('Café');
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.hash).toBe('#caf%C3%A9');
-    click('Café');
+    expect(click('Café').defaultPrevented).toBe(true);
     click('Hundred');
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
-    click('Hundred');
-    expect(scrolled).toEqual(['big', 'café', '100%']);
+    expect(dom.window.location.href).toBe('about:srcdoc#100%');
     click('Big only');
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.hash).toBe('#big');
