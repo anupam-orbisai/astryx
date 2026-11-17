@@ -756,7 +756,7 @@ const CARRIED_PRELUDE =
  * @returns {string}
  */
 export function withCarriedPaths(script, rewrites, carried) {
-  const inline = replaceCarried(script, rewrites, () => null);
+  const inline = inlineCarried(script, rewrites);
   const tokens = carriedTokens(script, rewrites, carried);
   if (tokens.length === 0) return inline;
   // Each token to read becomes a mark no script holds, so the text pass
@@ -770,7 +770,7 @@ export function withCarriedPaths(script, rewrites, carried) {
   marked += script.slice(at);
   const read =
     CARRIED_PRELUDE +
-    replaceCarried(marked, rewrites, () => null).replace(/\u0000(\d+)\u0000/g, (_, i, offset, all) =>
+    inlineCarried(marked, rewrites).replace(/\u0000(\d+)\u0000/g, (_, i, offset, all) =>
       `${/[\w$]/.test(all[offset - 1] ?? '') ? ' ' : ''}${CARRIED_VALUES}[${i}]`,
     );
   try {
@@ -836,34 +836,24 @@ function carriedTokens(script, rewrites, carried) {
 }
 
 /**
+ * The script with each string that is exactly a path the markup's rewrite
+ * replaced written as the same data, and each CSS url() that names it too.
+ * Text the page shows (`children: "./photo.png"`) stays as written.
  * @param {string} script
  * @param {Map<string, string>} rewrites
- * @param {(index: number, was: string) => string | null} reading the
- *   expression that reads value `index` from the markup, or null to write
- *   the value itself
+ * @returns {string}
  */
-function replaceCarried(script, rewrites, reading) {
+function inlineCarried(script, rewrites) {
   let out = script;
-  let index = -1;
   for (const [was, now] of rewrites) {
-    index += 1;
     if (/["'`\\\n<]/.test(now) || /["'`\\\n]/.test(was)) continue;
     for (const quote of ['"', "'", '`']) {
       const literal = `${quote}${was}${quote}`;
       out = out
         .split(literal)
-        .map((part, i, parts) => {
-          if (i === parts.length - 1) return part;
-          // Text the page shows (`children: "./photo.png"`) stays as written.
-          if (/\bchildren:\s*$/.test(part)) return `${part}${literal}`;
-          // An object key, or a template a tag reads, cannot be a read.
-          const key = /[{,]\s*$/.test(part) && /^\s*:/.test(parts[i + 1]);
-          const tagged = quote === '`' && /[\w$)\]]$/.test(part);
-          const read = key || tagged ? null : reading(index, was);
-          if (read === null) return `${part}${quote}${now}${quote}`;
-          // Minified code writes a string right after a word (`return"…"`).
-          return `${part}${/[\w$]$/.test(part) ? ' ' : ''}${read}`;
-        })
+        .map((part, i, parts) =>
+          i === parts.length - 1 ? part : /\bchildren:\s*$/.test(part) ? `${part}${literal}` : `${part}${quote}${now}${quote}`,
+        )
         .join('');
     }
     // A CSS url() in a style the script sets (`backgroundImage:
