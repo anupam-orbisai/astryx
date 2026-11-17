@@ -98,24 +98,25 @@ const moveToPlace = event => {
   } catch {
     // An id that is not percent-encoded text (\`#100%\`) is looked up as written.
   }
-  const top = id === '' || id.toLowerCase() === 'top';
-  const place = top ? null : (document.getElementById(id) ?? document.getElementsByName(id)[0]);
+  const place = id === '' ? null : (document.getElementById(id) ?? document.getElementsByName(id)[0]);
+  // With no element to go to, \`#\` and \`#top\` mean the top of the document.
+  const top = !place && (id === '' || id.toLowerCase() === 'top');
   if (hash !== location.hash) location.hash = hash;
   // The same place again: a browser scrolls there once more.
   else if (place) place.scrollIntoView();
   else if (top) window.scrollTo(0, 0);
-  // Focus as a browser does after a move to a place: the place itself when it
-  // takes focus, else the document, with the next Tab starting from the place.
-  if (place && (place.hasAttribute('tabindex') || place.matches(focusable))) {
+  // Focus as a browser does after a move to an element: the element itself
+  // when it takes focus, else the document, with the next Tab starting from
+  // the element. A move to no element leaves focus where it is.
+  if (!place) return;
+  if (place.hasAttribute('tabindex') || place.matches(focusable)) {
     place.focus({preventScroll: true});
-  } else if (place) {
-    place.setAttribute('tabindex', '-1');
-    place.focus({preventScroll: true});
-    place.blur();
-    place.removeAttribute('tabindex');
-  } else if (document.activeElement instanceof HTMLElement) {
-    document.activeElement.blur();
+    return;
   }
+  place.setAttribute('tabindex', '-1');
+  place.focus({preventScroll: true});
+  place.blur();
+  place.removeAttribute('tabindex');
 };
 window.addEventListener('click', event => {
   if (event.target instanceof Element && event.target.closest('a[href^="#"]')) {

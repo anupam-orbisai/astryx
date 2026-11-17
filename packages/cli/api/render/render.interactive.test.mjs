@@ -237,6 +237,7 @@ export default function Page() {
       <h2 id="notes" tabIndex={-1}>Notes</h2>
       <a href="#big">Big only</a>
       <a href="#notes">Notes link</a>
+      <a href="#top">Back to top</a>
       <a href="#café">Café</a>
       <a href="#100%">Hundred</a>
       <a href="#">All</a>
@@ -286,6 +287,14 @@ export default function Page() {
     click('Notes link');
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(doc.activeElement).toBe(doc.getElementById('notes'));
+    // A move to the top with no element named "top" leaves focus on the link.
+    let toTop = 0;
+    dom.window.scrollTo = /** @type {any} */ (() => toTop++);
+    click('Back to top');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    click('Back to top');
+    expect(toTop).toBe(1);
+    expect(doc.activeElement?.textContent).toBe('Back to top');
     click('Big only');
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     // The same link again scrolls to its place once more, as a browser does.
