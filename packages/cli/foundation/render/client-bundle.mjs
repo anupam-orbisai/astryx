@@ -76,6 +76,7 @@ document.addEventListener('click', event => {
 // on the document or the window, even one it adds later: a capture listener
 // on the window, which runs first, adds a one-time listener for this click
 // that runs last, so a page that handles the link itself cancels the move.
+const focusable = 'a[href],area[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),iframe,summary,[contenteditable=""],[contenteditable="true"]';
 const moveToPlace = event => {
   if (event.defaultPrevented || !(event.target instanceof Element)) return;
   const link = event.target.closest('a[href]');
@@ -91,22 +92,30 @@ const moveToPlace = event => {
   ) return;
   event.preventDefault();
   const hash = new URL(href, location.href).hash;
-  if (hash !== location.hash) {
-    location.hash = hash;
-    return;
-  }
-  // The same place again: a browser scrolls there once more.
   let id = hash.slice(1);
   try {
     id = decodeURIComponent(id);
   } catch {
     // An id that is not percent-encoded text (\`#100%\`) is looked up as written.
   }
-  if (id === '' || id.toLowerCase() === 'top') {
-    window.scrollTo(0, 0);
-    return;
+  const top = id === '' || id.toLowerCase() === 'top';
+  const place = top ? null : (document.getElementById(id) ?? document.getElementsByName(id)[0]);
+  if (hash !== location.hash) location.hash = hash;
+  // The same place again: a browser scrolls there once more.
+  else if (place) place.scrollIntoView();
+  else if (top) window.scrollTo(0, 0);
+  // Focus as a browser does after a move to a place: the place itself when it
+  // takes focus, else the document, with the next Tab starting from the place.
+  if (place && (place.hasAttribute('tabindex') || place.matches(focusable))) {
+    place.focus({preventScroll: true});
+  } else if (place) {
+    place.setAttribute('tabindex', '-1');
+    place.focus({preventScroll: true});
+    place.blur();
+    place.removeAttribute('tabindex');
+  } else if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
   }
-  (document.getElementById(id) ?? document.getElementsByName(id)[0])?.scrollIntoView();
 };
 window.addEventListener('click', event => {
   if (event.target instanceof Element && event.target.closest('a[href^="#"]')) {

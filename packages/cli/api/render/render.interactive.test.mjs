@@ -234,7 +234,9 @@ export default function Page() {
       <span id="big" />
       <span id="café" />
       <span id="100%" />
+      <h2 id="notes" tabIndex={-1}>Notes</h2>
       <a href="#big">Big only</a>
+      <a href="#notes">Notes link</a>
       <a href="#café">Café</a>
       <a href="#100%">Hundred</a>
       <a href="#">All</a>
@@ -263,6 +265,8 @@ export default function Page() {
       const link = [...doc.querySelectorAll('a')].find(
         a => a.textContent === text,
       );
+      // A mouse press focuses a link before its click, as in a browser.
+      /** @type {any} */ (link)?.focus();
       const event = new dom.window.MouseEvent('click', {
         bubbles: true,
         cancelable: true,
@@ -275,6 +279,15 @@ export default function Page() {
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.href).toBe('about:srcdoc#big');
     expect(doc.getElementById('hash')?.textContent).toBe('#big');
+    // As in a browser, focus leaves the link for the document when the place
+    // takes no focus, and goes to the place itself when it does.
+    expect(doc.activeElement).toBe(doc.body);
+    expect(doc.getElementById('big')?.hasAttribute('tabindex')).toBe(false);
+    click('Notes link');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(doc.activeElement).toBe(doc.getElementById('notes'));
+    click('Big only');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     // The same link again scrolls to its place once more, as a browser does.
     /** @type {string[]} */
     const scrolled = [];
