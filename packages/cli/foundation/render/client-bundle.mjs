@@ -60,18 +60,6 @@ document.addEventListener('click', event => {
   const link = event.target.closest('a[href]');
   if (link) {
     const href = link.getAttribute('href').trim();
-    if (
-      href.startsWith('#') &&
-      !link.hasAttribute('target') &&
-      !link.hasAttribute('download') &&
-      event.button === 0 &&
-      !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) &&
-      document.baseURI.split('#')[0] !== location.href.split('#')[0]
-    ) {
-      event.preventDefault();
-      location.hash = href.slice(1);
-      return;
-    }
     if (!link.hasAttribute('target') && out.test(href)) {
       link.target = '_blank';
       link.rel = [...new Set([...link.rel.split(/\\s+/).filter(Boolean), 'noopener', 'noreferrer'])].join(' ');
@@ -83,6 +71,32 @@ document.addEventListener('click', event => {
   if (elsewhere(button.form, button)) return;
   event.preventDefault();
   submit(button.form, button);
+});
+// On the window, after the page's own click handlers (on the document too),
+// so a page that handles the link itself cancels the move first.
+window.addEventListener('click', event => {
+  if (event.defaultPrevented || !(event.target instanceof Element)) return;
+  const link = event.target.closest('a[href]');
+  if (!link) return;
+  const href = link.getAttribute('href').trim();
+  if (
+    !href.startsWith('#') ||
+    link.hasAttribute('target') ||
+    link.hasAttribute('download') ||
+    event.button !== 0 ||
+    event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
+    document.baseURI.split('#')[0] === location.href.split('#')[0]
+  ) return;
+  event.preventDefault();
+  const id = decodeURIComponent(href.slice(1));
+  if (location.hash.slice(1) !== href.slice(1)) {
+    location.hash = href.slice(1);
+    return;
+  }
+  // The same place again: a browser scrolls there once more.
+  const place = id === '' || id.toLowerCase() === 'top' ? null : (document.getElementById(id) ?? document.getElementsByName(id)[0]);
+  if (place) place.scrollIntoView();
+  else if (id === '' || id.toLowerCase() === 'top') window.scrollTo(0, 0);
 });
 document.addEventListener('keydown', event => {
   const field = event.target;

@@ -271,6 +271,22 @@ export default function Page() {
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.href).toBe('about:srcdoc#big');
     expect(doc.getElementById('hash')?.textContent).toBe('#big');
+    // The same link again scrolls to its place once more, as a browser does.
+    /** @type {string[]} */
+    const scrolled = [];
+    /** @type {any} */ (doc.getElementById('big')).scrollIntoView = () =>
+      scrolled.push('big');
+    expect(click('Big only').defaultPrevented).toBe(true);
+    expect(scrolled).toEqual(['big']);
+    expect(dom.window.location.href).toBe('about:srcdoc#big');
+    // A handler the page adds on the document after the file's script still
+    // cancels the move.
+    const stop = (/** @type {Event} */ e) => e.preventDefault();
+    doc.addEventListener('click', stop);
+    click('All');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.hash).toBe('#big');
+    doc.removeEventListener('click', stop);
     click('All');
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.href.startsWith('about:srcdoc')).toBe(true);
