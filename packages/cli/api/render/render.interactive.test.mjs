@@ -273,6 +273,13 @@ export default function Page() {
       link?.dispatchEvent(event);
       return event;
     };
+    // A first click on "#", while the address has no fragment yet, is a move
+    // to the top inside the same document, never a load of the file again.
+    /** @type {any} */ (dom.window).stillHere = true;
+    expect(click('All').defaultPrevented).toBe(true);
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.href).toBe('about:srcdoc#');
+    expect(/** @type {any} */ (dom.window).stillHere).toBe(true);
     expect(click('Big only').defaultPrevented).toBe(true);
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.href).toBe('about:srcdoc#big');

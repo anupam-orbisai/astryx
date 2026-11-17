@@ -91,18 +91,20 @@ const moveToPlace = event => {
   ) return;
   // The browser moves to the place against the frame's own address, so it
   // scrolls, sets :target, fires hashchange and moves focus as in a tab. The
-  // same place again is a navigation to the same address, which a browser
-  // also treats as a move to the place.
+  // same place again is a navigation to the same address with its fragment,
+  // which a browser also treats as a move to the place; without a fragment
+  // (\`#\` on a frame with none) it would load the file again.
   event.preventDefault();
   const hash = new URL(href, location.href).hash;
   if (hash !== location.hash) location.hash = hash;
-  else location.replace(location.href);
+  else location.replace(location.href.split('#')[0] + '#' + hash.slice(1));
 };
 window.addEventListener('click', event => {
-  if (event.target instanceof Element && event.target.closest('a[href^="#"]')) {
-    const last = () => {
+  const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
+  if (link && link.getAttribute('href').trim().startsWith('#')) {
+    const last = later => {
       window.removeEventListener('click', last);
-      moveToPlace(event);
+      if (later === event) moveToPlace(event);
     };
     window.addEventListener('click', last);
   }
