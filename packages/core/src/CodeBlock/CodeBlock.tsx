@@ -427,9 +427,11 @@ const styles = stylex.create({
   },
   sizeSm: {
     fontSize: typeScaleVars['--text-supporting-size'],
+    lineHeight: typeScaleVars['--text-supporting-leading'],
   },
   sizeMd: {
     fontSize: typeScaleVars['--text-code-size'],
+    lineHeight: typeScaleVars['--text-code-leading'],
   },
   copyButton: {
     // The copy control is a ghost IconButton (Button owns its own padding,
