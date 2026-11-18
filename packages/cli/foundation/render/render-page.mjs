@@ -1056,8 +1056,8 @@ function inlineAssets(text, kind, ctx) {
 
 /**
  * Where `text` holds markup a browser running scripts never makes elements
- * of, as [start, end] pairs: a comment (a bogus one too), the text of a
- * raw-text element (`<textarea>`, `<iframe>`, `<xmp>` and the others the
+ * of, as [start, end] pairs: a comment (a bogus one too), a CDATA section,
+ * the text of a raw-text element (`<textarea>`, `<iframe>`, `<xmp>` and the others the
  * scanner names, everything after `<plaintext>`), and each outermost
  * `<noscript>` or `<template>`, which runs to its own close tag past any
  * nested in it. The pieces are the HTML scanner's own.
@@ -1072,7 +1072,7 @@ function unread(text) {
   const open = [];
   let start = 0;
   for (const piece of scanHtml(text)) {
-    if (open.length === 0 && (piece.kind === 'comment' || piece.kind === 'raw')) {
+    if (open.length === 0 && (piece.kind === 'comment' || piece.kind === 'cdata' || piece.kind === 'raw')) {
       ranges.push([piece.start, piece.end]);
       continue;
     }
@@ -1098,6 +1098,36 @@ function unread(text) {
 const unreadOf = {text: '', ranges: /** @type {[number, number][]} */ ([])};
 
 /**
+ * Where each attribute a browser builds starts in `text`: the first of each
+ * name on a real start tag (the scanner's own pieces, so a tag inside a
+ * comment, raw text or another attribute's value is none), outside the
+ * ranges {@link unread} names.
+ * @param {string} text
+ * @returns {Set<number>}
+ */
+function builtAttrs(text) {
+  if (text === builtOf.text) return builtOf.at;
+  const ranges = unread(text);
+  /** @type {Set<number>} */
+  const at = new Set();
+  for (const piece of scanHtml(text)) {
+    if (piece.kind !== 'start' || ranges.some(([from, to]) => piece.start > from && piece.start < to)) continue;
+    const seen = new Set();
+    piece.attrs.forEach(([name], k) => {
+      if (seen.has(name)) return;
+      seen.add(name);
+      at.add(piece.spans[k][0]);
+    });
+  }
+  builtOf.text = text;
+  builtOf.at = at;
+  return at;
+}
+
+/** The last text {@link builtAttrs} read. */
+const builtOf = {text: '', at: /** @type {Set<number>} */ (new Set())};
+
+/**
  * Each reference to a file in markup (`src`, `poster`, `srcset`, and `url()`
  * in a `style` attribute) or in CSS (`url()`), replaced by what `resolve`
  * gives for it, or kept when it gives null.
@@ -1116,16 +1146,16 @@ function mapAssetRefs(text, kind, resolve, rewrites, marked) {
    * @param {string} attr
    * @param {string} was
    * @param {string} now
-   * @param {number} at where the attribute is in `text`
+   * @param {number} at where the white space before the attribute is in `text`
    * @param {string} text the markup it is in
    */
   const carry = (attr, was, now, at, text) => {
     if (!rewrites) return '';
     if (!rewrites.has(was)) rewrites.set(was, now);
-    // With scripts on, a browser reads <noscript> as text and keeps
-    // <template> out of the document: an element there carries nothing the
-    // script can read.
-    if (!marked || unread(text).some(([from, to]) => at > from && at < to)) return '';
+    // Only an attribute a browser builds carries anything the script can
+    // read: the first of its name on a real start tag, outside <noscript>
+    // and <template>.
+    if (!marked || !builtAttrs(text).has(at + 1)) return '';
     marked.add(was);
     return ` ${CARRY_ATTR}="${attr.toLowerCase()}:${[...rewrites.keys()].indexOf(was)}"`;
   };

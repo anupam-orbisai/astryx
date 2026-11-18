@@ -460,12 +460,32 @@ const SHAPES = [
   \`<?php \${IMG} ?>\`,
   \`<!bogus \${IMG}>\`,
   \`</ \${IMG}>\`,
+  \`<textarea></textareas>\${IMG}</textarea>\`,
+  \`<title></titles>\${IMG}</title>\`,
+  \`<iframe></iframes>\${IMG}</iframe>\`,
+  \`<script><!--<script>\${IMG}</script>x</script>\`,
+  \`<span data-tip='\${IMG}'>tip</span>\`,
+  \`<svg><![CDATA[ a > b \${IMG} ]]></svg>\`,
 ];
 export default function Page() {
   return (
     <main>
       {SHAPES.map(html => <div key={html} dangerouslySetInnerHTML={{__html: html}} />)}
       <p>{typeof document === 'undefined' ? '' : <img src={PATH} alt="Drawn" />}</p>
+    </main>
+  );
+}
+`,
+    );
+    put('src/shapes/other.png', fs.readFileSync(path.join(dir, 'src/shapes/photo.png')));
+    put(
+      'src/shapes/two-src.tsx',
+      `const OTHER = './other.png';
+export default function Page() {
+  return (
+    <main>
+      <div dangerouslySetInnerHTML={{__html: '<img src="./photo.png" src="./other.png" alt="Two">'}} />
+      <p>{typeof document === 'undefined' ? '' : <img src={OTHER} alt="Drawn" />}</p>
     </main>
   );
 }
@@ -484,7 +504,7 @@ export default function Page() {
 }
 `,
     );
-    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html'], ['src/shapes/nested-template.tsx', 'nested-template.html'], ['src/shapes/comment-textarea.tsx', 'comment-textarea.html'], ['src/shapes/raw-elements.tsx', 'raw-elements.html']]) {
+    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html'], ['src/shapes/nested-template.tsx', 'nested-template.html'], ['src/shapes/comment-textarea.tsx', 'comment-textarea.html'], ['src/shapes/raw-elements.tsx', 'raw-elements.html'], ['src/shapes/two-src.tsx', 'two-src.html']]) {
       await render(page, {cwd: dir, out});
     }
     /** @param {string} file */
@@ -520,11 +540,18 @@ export default function Page() {
     // Nor does one inside a comment or a <textarea>'s text.
     const quoted = await drawn('comment-textarea.html');
     expect(quoted.drawn).toMatch(/^data:image\/png;base64,/);
-    // Nor inside <iframe>, <xmp>, <noembed> or <noframes> text, or a bogus
-    // comment (<?…>, <!…>, </ …>).
+    // Nor inside <iframe>, <xmp>, <noembed> or <noframes> text, past a longer
+    // end tag (</textareas>), in a script's escaped text, inside another
+    // attribute's value, or in a bogus comment (<?…>, <!…>, </ …>).
     expect(read('raw-elements.html')).not.toContain(CARRY_ATTR);
     const raw = await drawn('raw-elements.html');
     expect(raw.drawn).toMatch(/^data:image\/png;base64,/);
+    // With two src attributes, only the first, the one a browser keeps, is
+    // carried: the script's ./other.png keeps its own data.
+    expect(read('two-src.html')).toContain(`${CARRY_ATTR}="src:0"`);
+    expect(read('two-src.html')).not.toContain('src:1');
+    const two = await drawn('two-src.html');
+    expect(two.drawn).toMatch(/^data:image\/png;base64,/);
   }, 120_000);
 
   it("keeps the first paint when the page's script throws", async () => {

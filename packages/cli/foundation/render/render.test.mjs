@@ -335,4 +335,23 @@ describe('scanHtml', () => {
     expect(pieces('</ <img src="a.png"><b>')).toEqual(['comment:</ <img src="a.png">', 'start:<b>']);
     expect(pieces('a < b')).toEqual(['text:a < b']);
   });
+
+  it('ends raw text only at its own end tag, and a script only where the script data states end it', () => {
+    expect(pieces('<textarea>a</textareas><img src="a.png"></textarea><b>')).toEqual(['start:<textarea>', 'raw:a</textareas><img src="a.png">', 'end:</textarea>', 'start:<b>']);
+    expect(pieces('<title>a</TITLE >b')).toEqual(['start:<title>', 'raw:a', 'end:</TITLE >', 'text:b']);
+    expect(pieces('<script>x<!--<script>y</script>z</script><b>')).toEqual(['start:<script>', 'raw:x<!--<script>y</script>z', 'end:</script>', 'start:<b>']);
+    expect(pieces('<script>a<!-- b --></script><b>')).toEqual(['start:<script>', 'raw:a<!-- b -->', 'end:</script>', 'start:<b>']);
+    expect(pieces('<script>a<!--<scripts></script><b>')).toEqual(['start:<script>', 'raw:a<!--<scripts>', 'end:</script>', 'start:<b>']);
+  });
+
+  it('reads a CDATA section inside svg or math to ]]>, and outside them as a bogus comment', () => {
+    expect(pieces('<svg><![CDATA[ a > <img src="a.png"> ]]></svg><b>')).toEqual(['start:<svg>', 'cdata:<![CDATA[ a > <img src="a.png"> ]]>', 'end:</svg>', 'start:<b>']);
+    expect(pieces('<![CDATA[ a > b ]]>')).toEqual(['comment:<![CDATA[ a >', 'text: b ]]>']);
+  });
+
+  it('says where each attribute is', () => {
+    const html = `<span data-tip='<img src="a.png">' id=b>`;
+    const [tag] = /** @type {any[]} */ ([...scanHtml(html)]);
+    expect(tag.spans.map((/** @type {[number, number]} */ [from, to]) => html.slice(from, to))).toEqual([`data-tip='<img src="a.png">'`, 'id=b']);
+  });
 });

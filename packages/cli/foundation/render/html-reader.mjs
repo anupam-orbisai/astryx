@@ -38,9 +38,9 @@ export const RAW_TEXT = new Set(['script', 'style', 'textarea', 'title', 'iframe
 /**
  * One piece of an HTML document, by its place in the text. `raw` is the
  * content of a raw-text element.
- * @typedef {{kind: 'text' | 'raw' | 'comment' | 'doctype', start: number, end: number}
+ * @typedef {{kind: 'text' | 'raw' | 'comment' | 'cdata' | 'doctype', start: number, end: number}
  *   | {kind: 'end', tag: string, start: number, end: number}
- *   | {kind: 'start', tag: string, attrs: Array<[string, string]>, selfClosing: boolean, start: number, end: number}} HtmlToken
+ *   | {kind: 'start', tag: string, attrs: Array<[string, string]>, spans: Array<[number, number]>, selfClosing: boolean, start: number, end: number}} HtmlToken
  */
 
 const SPACE = /[\t\n\f\r ]/;
@@ -51,10 +51,11 @@ const DOCTYPE = /<!doctype/iy;
 /**
  * The tag whose name starts at `i`, read as a browser reads it: an attribute
  * value is quoted or runs to a space or `>`, and a `/` just before `>` makes
- * the tag self-closing.
+ * the tag self-closing. `spans` holds where each attribute is, from its name
+ * to the end of its value.
  * @param {string} html
  * @param {number} i the first letter of the name
- * @returns {{tag: string, attrs: Array<[string, string]>, selfClosing: boolean, end: number} | 'text' | 'open'}
+ * @returns {{tag: string, attrs: Array<[string, string]>, spans: Array<[number, number]>, selfClosing: boolean, end: number} | 'text' | 'open'}
  *   'text' when the name is not a tag name, so the `<` is text; 'open' when
  *   no `>` ends the tag, so the rest of the document is text
  */
@@ -66,6 +67,8 @@ export function readTag(html, i) {
   const tag = html.slice(nameStart, i).toLowerCase();
   /** @type {Array<[string, string]>} */
   const attrs = [];
+  /** @type {Array<[number, number]>} */
+  const spans = [];
   let selfClosing = false;
   while (i < n && html[i] !== '>') {
     if (SPACE.test(html[i])) {
@@ -100,8 +103,56 @@ export function readTag(html, i) {
       }
     }
     attrs.push([name, value]);
+    spans.push([nameAt, i]);
   }
-  return i >= n ? 'open' : {tag, attrs, selfClosing, end: i + 1};
+  return i >= n ? 'open' : {tag, attrs, spans, selfClosing, end: i + 1};
+}
+
+/**
+ * Where the end tag of a raw-text element `tag` starts at or after `from`:
+ * `</tag` followed by whitespace, `/` or `>`, in any case; else the end. A
+ * longer name (`</textareas>`) ends nothing.
+ * @param {string} html
+ * @param {string} tag
+ * @param {number} from
+ * @returns {number}
+ */
+function endTagAt(html, tag, from) {
+  const end = new RegExp(`</${tag}(?=[\\t\\n\\f\\r />])`, 'gi');
+  end.lastIndex = from;
+  return end.exec(html)?.index ?? html.length;
+}
+
+/**
+ * Where a script's text ends, as the HTML tokenizer's script data states
+ * read it: after `<!--` the text is escaped, and an escaped `<script` opens a
+ * double-escaped run that only its own `</script` closes, so the `</script>`
+ * inside it ends nothing; `-->` returns to plain script data.
+ * @param {string} html
+ * @param {number} from
+ * @returns {number}
+ */
+function scriptEnd(html, from) {
+  const piece = /<!--|-->|<\/?script(?=[\t\n\f\r />])/gi;
+  piece.lastIndex = from;
+  /** @type {'data' | 'escaped' | 'double'} */
+  let state = 'data';
+  for (let m = piece.exec(html); m; m = piece.exec(html)) {
+    const found = m[0].toLowerCase();
+    if (found === '<!--') {
+      if (state === 'data') state = 'escaped';
+      // `<!-->` and `<!--->` close at once.
+      if (state === 'escaped' && /^-?>/.test(html.slice(m.index + 4, m.index + 6))) state = 'data';
+    } else if (found === '-->') {
+      if (state !== 'data') state = 'data';
+    } else if (found === '</script') {
+      if (state === 'double') state = 'escaped';
+      else return m.index;
+    } else if (state === 'escaped') {
+      state = 'double';
+    }
+  }
+  return html.length;
 }
 
 /**
@@ -109,7 +160,8 @@ export function readTag(html, i) {
  * the markup a render writes. A comment ends at the first `-->` after its
  * `<!--` (so `<!-->` and `<!--->` are whole comments), or at the end. A bogus
  * comment (`<?…`, a `<!` that starts no comment or doctype, or `</` before a
- * character that is not a letter) is a comment to the next `>`. The content
+ * character that is not a letter) is a comment to the next `>`; inside
+ * `<svg>` or `<math>`, `<![CDATA[` is a `cdata` piece to `]]>`. The content
  * of a raw-text element up to its end tag is one `raw` piece, so a tag or a
  * comment in a stylesheet is text; `<plaintext>` makes the rest of the
  * document one `raw` piece. A `<` that starts no tag is
@@ -122,6 +174,8 @@ export function* scanHtml(html) {
   const n = html.length;
   let at = 0;
   let text = 0;
+  // Inside <svg> or <math>, `<![CDATA[` opens a CDATA section to `]]>`.
+  let foreign = 0;
   while (at < n) {
     const lt = html.indexOf('<', at);
     if (lt < 0) break;
@@ -132,6 +186,9 @@ export function* scanHtml(html) {
     if (html.startsWith('<!--', lt)) {
       const close = html.indexOf('-->', lt + 2);
       token = {kind: 'comment', start: lt, end: close < 0 ? n : close + 3};
+    } else if (foreign > 0 && html.startsWith('<![CDATA[', lt)) {
+      const close = html.indexOf(']]>', lt + 9);
+      token = {kind: 'cdata', start: lt, end: close < 0 ? n : close + 3};
     } else if (DOCTYPE.test(html)) {
       const close = html.indexOf('>', lt);
       if (close < 0) break;
@@ -146,7 +203,7 @@ export function* scanHtml(html) {
       if (read !== 'text') {
         token = closing
           ? {kind: 'end', tag: read.tag, start: lt, end: read.end}
-          : {kind: 'start', tag: read.tag, attrs: read.attrs, selfClosing: read.selfClosing, start: lt, end: read.end};
+          : {kind: 'start', tag: read.tag, attrs: read.attrs, spans: read.spans, selfClosing: read.selfClosing, start: lt, end: read.end};
       }
     }
     if (!token) {
@@ -156,15 +213,17 @@ export function* scanHtml(html) {
     if (lt > text) yield {kind: 'text', start: text, end: lt};
     yield token;
     at = text = token.end;
+    if ((token.kind === 'start' || token.kind === 'end') && (token.tag === 'svg' || token.tag === 'math')) {
+      if (token.kind === 'end') foreign = Math.max(0, foreign - 1);
+      else if (!token.selfClosing) foreign++;
+    }
     if (token.kind === 'start' && token.tag === 'plaintext') {
       if (at < n) yield {kind: 'raw', start: at, end: n};
       return;
     }
     // A self-closing raw-text element (an SVG `<title />`) holds nothing.
     if (token.kind === 'start' && RAW_TEXT.has(token.tag) && !token.selfClosing) {
-      const closing = new RegExp(`</${token.tag}`, 'gi');
-      closing.lastIndex = at;
-      const stop = closing.exec(html)?.index ?? n;
+      const stop = token.tag === 'script' ? scriptEnd(html, at) : endTagAt(html, token.tag, at);
       yield {kind: 'raw', start: at, end: stop};
       at = text = stop;
     }
