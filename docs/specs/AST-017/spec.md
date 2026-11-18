@@ -500,6 +500,10 @@ one removal merged ahead of the decision to allow it.
   `experimental export`, labeled experimental, and never runs it, because
   people and agents who type those words mean that command; the exception
   ends when the command graduates or is removed.
+  A third named exception: one line of the agent docs block MAY name
+  `experimental export`, only when the project's installed CLI has it and only
+  for a request to share a page as one file; that exception ends when export
+  graduates or is removed.
 - **FR28 — A planned minor needs no prior deprecation; a patch does.** A change
   landing in a declared minor needs no deprecation path: its `[breaking]` Changeset
   describing the change, with the replacement and migration where they help the
