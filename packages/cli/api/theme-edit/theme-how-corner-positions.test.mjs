@@ -185,6 +185,33 @@ describe('the corners an ask names', () => {
     ).toEqual(["border-radius '4px 0 0 4px' --on tab"]);
   }, 240_000);
 
+  it('reads a corner written as calc() as one corner', async ctx => {
+    if (needBases(ctx)) return;
+    await themeEditNew('e', {cwd, like: 'neutral'});
+    await themeEditSet(
+      'e',
+      'border-radius',
+      'max(0px, calc(var(--radius-container) + 4px))',
+      {cwd, on: 'card'},
+    );
+    const {data} = await themeEditHow('cards rounded on top', {
+      cwd,
+      theme: 'e',
+    });
+    const [w] = (data.results?.[0]?.commands ?? []).map(
+      (/** @type {string} */ c) => c.replace(/^.*? editor set e /, ''),
+    );
+    expect(w).toBe(
+      "border-radius 'max(0px, calc(var(--radius-container) + 4px)) max(0px, calc(var(--radius-container) + 4px)) 0 0' --on card",
+    );
+    await themeEditSet(
+      'e',
+      'border-radius',
+      String(/'([^']+)'/.exec(String(w))?.[1]),
+      {cwd, on: 'card'},
+    );
+  }, 240_000);
+
   it('set takes each answer, a menu included', async ctx => {
     if (needBases(ctx)) return;
     for (const q of [

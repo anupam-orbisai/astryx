@@ -20877,10 +20877,13 @@ export function draftAnswer(ctx, env, question) {
             // written as, `resolvedAt` what it measures.
             const ownNow = nowIn(/** @type {string} */ (on), 'border-radius');
             const ownText = ownNow != null ? String(ownNow).trim() : null;
+            // (Its corners as CSS reads them: a calc() or var() is one
+            // corner, whatever spaces it holds; an elliptical radius is
+            // left as it is.)
             const fourOf = (/** @type {string} */ v) => {
-              if (v.includes('/')) return null;
-              const w = v.split(/\s+/);
-              if (w.length > 4) return null;
+              if (splitTop(v, '/').length > 1) return null;
+              const w = splitTop(v, ' ').map(x => x.trim());
+              if (!w.length || w.length > 4) return null;
               const [a, b = a, cc = a, dd = b] = w;
               return /** @type {Record<string, string>} */ ({
                 'start-start': a,
