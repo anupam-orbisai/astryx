@@ -1221,6 +1221,109 @@ describe('a render with images from the web', () => {
     }
   }, 120_000);
 
+  it('still carries a kept address in a stylesheet, counts a pushed property array as untraced, and lists each candidate of a kept srcset', async () => {
+    const dir = makeLinkedFixture('astryx-render-url-api-kept-', [
+      'react',
+      'react-dom',
+    ]);
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'page.css'),
+        '.hero { background-image: url(https://cdn.example.com/a.png); }\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'data.json'),
+        JSON.stringify({
+          set: 'https://cdn.example.com/s1.png 1x, https://cdn.example.com/s2.png 2x',
+        }),
+      );
+      const pages = {
+        // A traced URL API call on an address a stylesheet also names.
+        'styled.jsx': [
+          "import './page.css';",
+          "const hero = 'https://cdn.example.com/a.png';",
+          'export default function Page() {',
+          '  const url = new URL(hero);',
+          "  url.searchParams.set('w', '200');",
+          '  return <main className="hero"><img src={hero} alt="Hero" /><p>{url.href}</p></main>;',
+          '}',
+          '',
+        ],
+        // An element pushed onto a property's array after it is made.
+        'pushed.jsx': [
+          "import {useState} from 'react';",
+          "const product = {photos: ['https://cdn.example.com/a.png']};",
+          "product.photos.push('https://cdn.example.com/b.png');",
+          'export default function Page() {',
+          '  const [open, setOpen] = useState(false);',
+          '  const sized = [];',
+          '  for (const src of product.photos) {',
+          '    const url = new URL(src);',
+          "    url.searchParams.set('w', '200');",
+          '    sized.push(url.href);',
+          '  }',
+          '  return <main><button onClick={() => setOpen(true)}>Show</button>{open && sized.map(s => <img key={s} src={s} alt="" />)}</main>;',
+          '}',
+          '',
+        ],
+        // A first-paint srcset read from a JSON file, under the untraced fallback.
+        'jsonset.jsx': [
+          "import data from './data.json';",
+          'export default function Page() {',
+          "  const sized = ['https://cdn.example.com/g.png'].map(src => new URL(src).href);",
+          '  return <main><img srcSet={data.set} alt="Set" /><p>{sized[0]}</p></main>;',
+          '}',
+          '',
+        ],
+      };
+      const images = {
+        'https://cdn.example.com/a.png': png(),
+        'https://cdn.example.com/b.png': png(),
+        'https://cdn.example.com/g.png': png(),
+        'https://cdn.example.com/s1.png': png(),
+        'https://cdn.example.com/s2.png': png(),
+      };
+      const data = `data:image/png;base64,${PNG.toString('base64')}`;
+      for (const [name, lines] of Object.entries(pages)) {
+        const file = path.join(dir, name);
+        fs.writeFileSync(file, lines.join('\n'));
+        const {fetch} = fetchFrom(images);
+        const page = await renderPage(file, {cwd: dir, remoteImages: {fetch}});
+        const failed = (page.remoteImages?.failed ?? []).map(f => f.url);
+        if (name === 'styled.jsx') {
+          // The stylesheet still carries the image; the script keeps the address.
+          expect(page.html).toContain(`url("${data}")`);
+          expect(
+            page.warnings.some(w => w.message.includes('could not fetch')),
+          ).toBe(false);
+          expect(failed).toEqual(['https://cdn.example.com/a.png']);
+        } else if (name === 'pushed.jsx') {
+          expect(
+            page.warnings.some(
+              w =>
+                w.code === 'remote-asset' && w.message.includes('cannot trace'),
+            ),
+          ).toBe(true);
+          expect(page.html.slice(page.html.lastIndexOf('<script>'))).toContain(
+            'https://cdn.example.com/b.png',
+          );
+        } else {
+          expect(failed).toEqual(
+            expect.arrayContaining([
+              'https://cdn.example.com/s1.png',
+              'https://cdn.example.com/s2.png',
+            ]),
+          );
+          expect(page.remoteImages?.fetched ?? []).not.toContain(
+            'https://cdn.example.com/s1.png',
+          );
+        }
+      }
+    } finally {
+      removeLinkedFixture(dir);
+    }
+  }, 180_000);
+
   it('reads new globalThis.URL as the URL API', async () => {
     const dir = makeLinkedFixture('astryx-render-url-api-global-', [
       'react',

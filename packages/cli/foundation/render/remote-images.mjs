@@ -145,6 +145,8 @@ export function remoteImages({
 } = {}) {
   /** @type {Map<string, RemoteImage>} */
   const results = new Map();
+  /** Each address the page's script keeps as written, with why. @type {Map<string, string>} */
+  const kept = new Map();
   /** Every address asked for, in the order the render first named it. @type {Set<string>} */
   const asked = new Set();
   /** The answer of each address being fetched now. @type {Map<string, Promise<RemoteImage>>} */
@@ -346,13 +348,13 @@ export function remoteImages({
     /**
      * Note an address the page's script keeps as written, with why, so the
      * result lists it among those not carried, also when the first paint
-     * carries it.
+     * carries it. Its fetched data stays for the rest of the file.
      * @param {string} url
      * @param {string} reason
      */
     keep(url, reason) {
       asked.add(url);
-      results.set(url, {reason});
+      if (!kept.has(url)) kept.set(url, reason);
     },
     /** Stop the render's time limit. */
     done() {
@@ -370,8 +372,10 @@ export function remoteImages({
       // In the order the page names them, whichever answered first.
       for (const url of asked) {
         const result = results.get(url);
-        if (!result) continue;
-        if ('uri' in result) fetched.push(url);
+        const why = kept.get(url);
+        if (why !== undefined) failed.push({url, reason: why});
+        else if (!result) continue;
+        else if ('uri' in result) fetched.push(url);
         else failed.push({url, reason: result.reason});
       }
       return {fetched, failed};

@@ -1216,7 +1216,12 @@ export async function renderPage(entry, options = {}) {
   // When the page hands the URL API an address the render cannot trace (a
   // callback's parameter, an import), any address may reach it: the script
   // keeps every https image address as written.
-  const untraced = /** @type {{file: string, line: number} | null} */ (message.urlApiUntraced ?? null);
+  let untraced = /** @type {{file: string, line: number} | null} */ (message.urlApiUntraced ?? null);
+  // A property the page reads into the URL API and changes after making it
+  // may hold anything.
+  for (const changed of /** @type {{key: string, file: string, line: number}[]} */ (message.changedProps ?? [])) {
+    if (!untraced && urlProps.has(changed.key)) untraced = {file: changed.file, line: changed.line};
+  }
   if (untraced) {
     for (const url of /** @type {string[]} */ (message.remoteLiterals ?? [])) keptAsWritten.add(url);
     const where = `${path.relative(dir, untraced.file).split(path.sep).join('/')}:${untraced.line}`;
@@ -1341,9 +1346,10 @@ export async function renderPage(entry, options = {}) {
       if (!/^https:\/\//i.test(url)) continue;
       ctx.rewrites.delete(url);
       // A first-paint image: the markup carries it, the script draws it from
-      // the network.
-      if (!/\s/.test(url)) {
-        remote?.keep(url, 'the page hands the URL API an address the render cannot trace, so the script keeps each address as written');
+      // the network. A `srcset` value names each of its candidates.
+      const urls = /\s/.test(url) ? parseSrcset(url).map(c => c.url).filter(u => /^https:\/\//i.test(u)) : [url];
+      for (const one of urls) {
+        remote?.keep(one, 'the page hands the URL API an address the render cannot trace, so the script keeps each address as written');
       }
     }
   }
@@ -1815,6 +1821,7 @@ export async function renderPage(entry, options = {}) {
       `${generator}<title>${escapeHtml(title)}</title>${style}</head><body>${body}` +
       `${sourceBlock(path.basename(entry), embedded)}${scriptTag}</body></html>\n`;
   }
+  const remoteSummary = remote?.summary();
   return {
     html,
     files: embedded.map(f => f.path),
@@ -1832,6 +1839,6 @@ export async function renderPage(entry, options = {}) {
     ...(leftOut.length > 0 ? {notCarried: leftOut} : {}),
     fromSet: message.fromSet ?? [],
     ...(pageScript ? {scriptBytes: Buffer.byteLength(pageScript), scriptModules: message.scriptModules ?? 0} : {}),
-    ...(remote && remote.results.size > 0 ? {remoteImages: remote.summary()} : {}),
+    ...(remoteSummary && remoteSummary.fetched.length + remoteSummary.failed.length > 0 ? {remoteImages: remoteSummary} : {}),
   };
 }

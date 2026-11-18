@@ -166,6 +166,12 @@ const urlApiProps = new Set();
 /** The first argument to the URL API the page's files cannot trace, if any. @type {{file: string, line: number} | null} */
 let urlApiUntraced = null;
 /**
+ * Property names whose array the page changes after making it
+ * (`product.photos.push(…)`, `product.photos = …`), with where first.
+ * @type {Map<string, {file: string, line: number}>}
+ */
+const changedProps = new Map();
+/**
  * https image literals the page writes as a property's or an attribute's
  * value, with where: one whose property the page reads into the URL API in
  * any file is kept as written too.
@@ -963,6 +969,11 @@ function urlApiLiterals(program, filename) {
     if (first?.isSpreadElement?.()) untraced(first);
     else follow(first, 0);
   };
+  /** @param {any} n @param {any} p */
+  const changes = (n, p) => {
+    const key = n?.type === 'MemberExpression' ? memberName(n) : null;
+    if (key && !changedProps.has(key)) changedProps.set(key, {file: filename, line: p.node.loc?.start.line ?? 0});
+  };
   program.traverse({
     NewExpression(/** @type {any} */ p) {
       if (isUrl(p.node.callee)) argument(p);
@@ -970,6 +981,14 @@ function urlApiLiterals(program, filename) {
     CallExpression(/** @type {any} */ p) {
       const callee = p.node.callee;
       if (callee.type === 'MemberExpression' && memberName(callee) === 'parse' && isUrl(callee.object)) argument(p);
+      // `product.photos.push(…)`
+      if (callee.type === 'MemberExpression' && ARRAY_CHANGES.has(memberName(callee) ?? '')) changes(callee.object, p);
+    },
+    AssignmentExpression(/** @type {any} */ p) {
+      // `product.photos = …` and `product.photos[0] = …`
+      const left = p.node.left;
+      changes(left, p);
+      if (left.type === 'MemberExpression') changes(left.object, p);
     },
   });
   return nodes;
@@ -2426,6 +2445,7 @@ try {
     urlChanged: [...urlChanged],
     urlApiProps: [...urlApiProps],
     urlApiUntraced,
+    changedProps: [...changedProps].map(([key, at]) => ({key, ...at})),
     keyedLiterals,
     logs,
     script: script?.code ?? null,
