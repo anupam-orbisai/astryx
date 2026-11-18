@@ -154,13 +154,16 @@ function scriptEnd(html, from) {
   return html.length;
 }
 
-/** The svg elements whose content is HTML: its HTML integration points. */
-const SVG_HTML = new Set(['foreignobject', 'desc', 'title']);
+/** Each open element the scanner tracks inside svg or MathML content. */
+/** @typedef {{ns: 'html' | 'svg' | 'math', tag: string, htmlPoint: boolean, textPoint: boolean}} OpenElement */
 
-/** The MathML elements whose content is HTML (text integration points). */
-const MATH_HTML = new Set(['mi', 'mo', 'mn', 'ms', 'mtext']);
+/** MathML text integration points (HTML §13.2.6): mi, mo, mn, ms, mtext. */
+const MATH_TEXT_POINTS = new Set(['mi', 'mo', 'mn', 'ms', 'mtext']);
 
-/** The start tags that end svg or MathML content, as the tree builder reads them. */
+/** SVG HTML integration points (HTML §13.2.6): foreignObject, desc, title. */
+const SVG_HTML_POINTS = new Set(['foreignobject', 'desc', 'title']);
+
+/** The start tags that end svg or MathML content (HTML §13.2.6.5). */
 const BREAKOUT = new Set([
   'b', 'big', 'blockquote', 'body', 'br', 'center', 'code', 'dd', 'div', 'dl', 'dt', 'em', 'embed',
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'hr', 'i', 'img', 'li', 'listing', 'menu', 'meta',
@@ -168,14 +171,88 @@ const BREAKOUT = new Set([
   'table', 'tt', 'u', 'ul', 'var',
 ]);
 
+/** HTML's "special" elements (HTML §13.2.4.2): an end tag stops at one. */
+const SPECIAL = new Set([
+  'address', 'applet', 'area', 'article', 'aside', 'base', 'basefont', 'bgsound', 'blockquote', 'body',
+  'br', 'button', 'caption', 'center', 'col', 'colgroup', 'dd', 'details', 'dir', 'div', 'dl', 'dt',
+  'embed', 'fieldset', 'figcaption', 'figure', 'footer', 'form', 'frame', 'frameset', 'h1', 'h2', 'h3',
+  'h4', 'h5', 'h6', 'head', 'header', 'hgroup', 'hr', 'html', 'iframe', 'img', 'input', 'keygen', 'li',
+  'link', 'listing', 'main', 'marquee', 'menu', 'meta', 'nav', 'noembed', 'noframes', 'noscript',
+  'object', 'ol', 'p', 'param', 'plaintext', 'pre', 'script', 'search', 'section', 'select', 'source',
+  'style', 'summary', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th', 'thead', 'title',
+  'tr', 'track', 'ul', 'wbr', 'xmp',
+]);
+
 /**
- * Whether a start tag in svg or MathML content ends it: a breakout tag, or a
- * `<font>` with a color, face or size.
+ * Whether a start tag in svg or MathML content ends it (HTML §13.2.6.5): a
+ * breakout tag, or a `<font>` with a color, face or size.
  * @param {string} tag
  * @param {Array<[string, string]>} attrs
  */
 const breaksOut = (tag, attrs) =>
   BREAKOUT.has(tag) || (tag === 'font' && attrs.some(([name]) => name === 'color' || name === 'face' || name === 'size'));
+
+/**
+ * The element a start tag opens in svg or MathML content, with the HTML
+ * integration points (svg foreignObject, desc and title; a MathML
+ * annotation-xml whose encoding is text/html or application/xhtml+xml) and
+ * the MathML text integration points marked (HTML §13.2.6).
+ * @param {'svg' | 'math'} ns
+ * @param {string} tag
+ * @param {Array<[string, string]>} attrs
+ * @returns {OpenElement}
+ */
+function foreignElement(ns, tag, attrs) {
+  const encoding = (attrs.find(([name]) => name === 'encoding')?.[1] ?? '').toLowerCase();
+  const htmlPoint =
+    ns === 'svg'
+      ? SVG_HTML_POINTS.has(tag)
+      : tag === 'annotation-xml' && (encoding === 'text/html' || encoding === 'application/xhtml+xml');
+  return {ns, tag, htmlPoint, textPoint: ns === 'math' && MATH_TEXT_POINTS.has(tag)};
+}
+
+/**
+ * Whether the tree construction dispatcher (HTML §13.2.6) hands a start tag
+ * to the HTML insertion mode rather than to the rules for foreign content.
+ * @param {OpenElement | undefined} node the current node
+ * @param {string} tag
+ */
+const startIsHtml = (node, tag) =>
+  !node ||
+  node.ns === 'html' ||
+  (node.textPoint && tag !== 'mglyph' && tag !== 'malignmark') ||
+  (node.ns === 'math' && node.tag === 'annotation-xml' && tag === 'svg') ||
+  node.htmlPoint;
+
+/**
+ * Close what an end tag closes in svg or MathML content, as the tree builder
+ * does. In foreign content (HTML §13.2.6.5, "any other end tag"): walk the
+ * stack from the current node, pop up to a node whose lowercased name is the
+ * tag's, and at the first HTML element hand the token to the HTML insertion
+ * mode. There ("any other end tag" in body, §13.2.6.4.7): pop up to a node
+ * of that name, and stop at a special element, which the tag cannot close.
+ * @param {OpenElement[]} open
+ * @param {string} tag
+ */
+function closeEnd(open, tag) {
+  let k = open.length - 1;
+  if (k >= 0 && open[k].ns !== 'html') {
+    for (; k >= 0 && open[k].ns !== 'html'; k--) {
+      if (open[k].tag === tag) {
+        open.length = k;
+        return;
+      }
+    }
+  }
+  for (; k >= 0; k--) {
+    if (open[k].tag === tag) {
+      open.length = k;
+      return;
+    }
+    const node = open[k];
+    if (node.ns === 'html' ? SPECIAL.has(node.tag) : node.htmlPoint || node.textPoint) return;
+  }
+}
 
 /**
  * Split an HTML document into its pieces, in order, as a browser does for
@@ -184,9 +261,10 @@ const breaksOut = (tag, attrs) =>
  * comment (`<?…`, a `<!` that starts no comment or doctype, or `</` before a
  * character that is not a letter) is a comment to the next `>`. Inside svg
  * or MathML content, `<![CDATA[` is a `cdata` piece to `]]>`, `/>` closes a
- * tag and no element holds raw text; an HTML integration point
- * (`<foreignObject>`, `<desc>`, svg `<title>`, `<mi>`, `<mo>`, `<mn>`, `<ms>`,
- * `<mtext>`) and a breakout tag (`<p>`, `<div>`…) return to HTML. The content
+ * tag and no element holds raw text; an integration point (`<foreignObject>`,
+ * `<desc>`, svg `<title>`, an HTML `<annotation-xml>`, `<mi>`, `<mo>`, `<mn>`,
+ * `<ms>`, `<mtext>`) and a breakout tag (`<p>`, `<div>`…) return to HTML,
+ * and end tags close what the tree builder closes. The content
  * of a raw-text element up to its end tag is one `raw` piece, so a tag or a
  * comment in a stylesheet is text; `<plaintext>` makes the rest of the
  * document one `raw` piece. A `<` that starts no tag is
@@ -199,16 +277,16 @@ export function* scanHtml(html) {
   const n = html.length;
   let at = 0;
   let text = 0;
-  // The open svg and MathML elements, and the HTML integration points among
-  // them, as the tree builder keeps them: inside svg or math (`foreign`), a
-  // tag is foreign, `/>` closes it and `<![CDATA[` runs to `]]>`; in an
-  // integration point, and after a breakout tag closes the foreign elements,
-  // the content is HTML again.
-  /** @type {Array<{ns: 'svg' | 'math' | 'html', tag: string}>} */
+  // The open elements of svg or MathML content, as the tree builder keeps
+  // them (HTML §13.2.6): HTML elements are kept only inside it. A start tag
+  // the dispatcher gives to foreign content is foreign, `/>` closes it, and
+  // no element holds raw text; `<![CDATA[` is CDATA while the current node is
+  // foreign (§13.2.5.42).
+  /** @type {OpenElement[]} */
   const open = [];
-  const foreign = () => open.length > 0 && open[open.length - 1].ns !== 'html';
+  const current = () => open[open.length - 1];
   const breakOut = () => {
-    while (foreign()) open.pop();
+    for (let node = current(); node && node.ns !== 'html' && !node.htmlPoint && !node.textPoint; node = current()) open.pop();
   };
   while (at < n) {
     const lt = html.indexOf('<', at);
@@ -216,11 +294,13 @@ export function* scanHtml(html) {
     const next = html[lt + 1] ?? '';
     /** @type {HtmlToken | null} */
     let token = null;
+    /** Whether the HTML insertion mode reads this start tag. */
+    let asHtml = true;
     DOCTYPE.lastIndex = lt;
     if (html.startsWith('<!--', lt)) {
       const close = html.indexOf('-->', lt + 2);
       token = {kind: 'comment', start: lt, end: close < 0 ? n : close + 3};
-    } else if (foreign() && html.startsWith('<![CDATA[', lt)) {
+    } else if (current() && current().ns !== 'html' && html.startsWith('<![CDATA[', lt)) {
       const close = html.indexOf(']]>', lt + 9);
       token = {kind: 'cdata', start: lt, end: close < 0 ? n : close + 3};
     } else if (DOCTYPE.test(html)) {
@@ -234,19 +314,27 @@ export function* scanHtml(html) {
       const closing = next === '/';
       const read = readTag(html, lt + (closing ? 2 : 1));
       if (read === 'open') break;
-      if (foreign() && (closing ? read.tag === 'p' || read.tag === 'br' : breaksOut(read.tag, read.attrs))) breakOut();
-      token = closing
-        ? {kind: 'end', tag: read.tag, start: lt, end: read.end}
-        : {
-            kind: 'start',
-            tag: read.tag,
-            attrs: read.attrs,
-            spans: read.spans,
-            // A browser honours `/>` only on svg and MathML elements.
-            selfClosing: read.selfClosing && (foreign() || read.tag === 'svg' || read.tag === 'math'),
-            start: lt,
-            end: read.end,
-          };
+      if (closing) {
+        if (current() && current().ns !== 'html' && (read.tag === 'p' || read.tag === 'br')) breakOut();
+        else closeEnd(open, read.tag);
+        token = {kind: 'end', tag: read.tag, start: lt, end: read.end};
+      } else {
+        asHtml = startIsHtml(current(), read.tag);
+        if (!asHtml && breaksOut(read.tag, read.attrs)) {
+          breakOut();
+          asHtml = true;
+        }
+        token = {
+          kind: 'start',
+          tag: read.tag,
+          attrs: read.attrs,
+          spans: read.spans,
+          // A browser honours `/>` only on an svg or MathML element.
+          selfClosing: read.selfClosing && (!asHtml || read.tag === 'svg' || read.tag === 'math'),
+          start: lt,
+          end: read.end,
+        };
+      }
     }
     if (!token) {
       at = lt + 1;
@@ -255,32 +343,19 @@ export function* scanHtml(html) {
     if (lt > text) yield {kind: 'text', start: text, end: lt};
     yield token;
     at = text = token.end;
-    if (token.kind === 'start' && foreign()) {
-      const ns = open[open.length - 1].ns === 'math' ? 'math' : 'svg';
-      if (!token.selfClosing) open.push({ns: (ns === 'svg' ? SVG_HTML : MATH_HTML).has(token.tag) ? 'html' : ns, tag: token.tag});
+    if (token.kind !== 'start') continue;
+    if (!asHtml || token.tag === 'svg' || token.tag === 'math') {
+      const node = current();
+      const ns = asHtml ? /** @type {'svg' | 'math'} */ (token.tag) : node?.ns === 'math' ? 'math' : 'svg';
+      if (!token.selfClosing) open.push(foreignElement(ns, token.tag, token.attrs));
       continue;
     }
-    if (token.kind === 'start' && (token.tag === 'svg' || token.tag === 'math')) {
-      if (!token.selfClosing) open.push({ns: token.tag, tag: token.tag});
-      continue;
-    }
-    if (token.kind === 'end') {
-      // An end tag closes an open element of its name above the nearest
-      // HTML content, or the integration point it is in; else nothing.
-      for (let k = open.length - 1; k >= 0; k--) {
-        if (open[k].tag === token.tag) {
-          open.length = k;
-          break;
-        }
-        if (open[k].ns === 'html') break;
-      }
-      continue;
-    }
-    if (token.kind === 'start' && token.tag === 'plaintext') {
+    if (open.length > 0 && !VOID.has(token.tag)) open.push({ns: 'html', tag: token.tag, htmlPoint: false, textPoint: false});
+    if (token.tag === 'plaintext') {
       if (at < n) yield {kind: 'raw', start: at, end: n};
       return;
     }
-    if (token.kind === 'start' && RAW_TEXT.has(token.tag)) {
+    if (RAW_TEXT.has(token.tag)) {
       const stop = token.tag === 'script' ? scriptEnd(html, at) : endTagAt(html, token.tag, at);
       yield {kind: 'raw', start: at, end: stop};
       at = text = stop;

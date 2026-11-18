@@ -482,6 +482,10 @@ const SHAPES = [
   \`<math><mi><iframe/>\${IMG}</iframe></mi></math>\`,
   \`<math><mtext><style/>\${IMG}</style></mtext></math>\`,
   \`<svg><p><title/>\${IMG}</title></svg>\`,
+  \`<svg><foreignObject><div></foreignObject><textarea/>\${IMG}</textarea></div></foreignObject></svg>\`,
+  \`<svg><desc></svg></desc><textarea/>\${IMG}</textarea>\`,
+  \`<math><mi><svg></math><textarea/>\${IMG}</textarea>\`,
+  \`<math><annotation-xml encoding="text/html"><textarea/>\${IMG}</textarea></annotation-xml></math>\`,
 ];
 export default function Page() {
   return (

@@ -377,6 +377,28 @@ describe('scanHtml', () => {
     expect(pieces('<svg><path/><title>t</title></svg>')).toEqual(['start:<svg>', 'start:<path/>', 'start:<title>', 'text:t', 'end:</title>', 'end:</svg>']);
   });
 
+  it('closes svg and MathML elements as the tree builder does (HTML 13.2.6)', () => {
+    const raw = (/** @type {string} */ html) => pieces(html).includes('raw:<img src="a.png">');
+    const IMG = '<textarea/><img src="a.png"></textarea>';
+    // Foreign "any other end tag": walk up to the node of that name.
+    expect(raw(`<svg><desc></svg></desc>${IMG}`)).toBe(true);
+    expect(raw(`<math><mi><svg></math>${IMG}`)).toBe(true);
+    // ...and at the first HTML element, the HTML mode reads it: a special
+    // element there stops it, so the integration point stays open.
+    expect(raw(`<svg><foreignObject><div></foreignObject>${IMG}</div></foreignObject></svg>`)).toBe(true);
+    expect(raw(`<svg><foreignObject><div></svg>${IMG}</div></foreignObject></svg>`)).toBe(true);
+    // An annotation-xml with an HTML encoding is an HTML integration point;
+    // one without is not, so /> closes and no raw text opens there.
+    expect(raw(`<math><annotation-xml encoding="text/html">${IMG}</annotation-xml></math>`)).toBe(true);
+    expect(raw(`<math><annotation-xml>${IMG}</annotation-xml></math>`)).toBe(false);
+    // In a MathML text integration point, mglyph and malignmark stay MathML.
+    expect(pieces('<math><mi><mglyph/>x</mi></math>')).toContain('start:<mglyph/>');
+    // The dispatcher gives <svg> in annotation-xml to HTML: an svg root.
+    expect(pieces('<math><annotation-xml><svg><path/></svg></annotation-xml></math>')).toContain('start:<path/>');
+    // CDATA while the current node is foreign, an integration point too.
+    expect(pieces('<svg><desc><![CDATA[ a > b ]]></desc></svg>')).toContain('cdata:<![CDATA[ a > b ]]>');
+  });
+
   it('says where each attribute is', () => {
     const html = `<span data-tip='<img src="a.png">' id=b>`;
     const [tag] = /** @type {any[]} */ ([...scanHtml(html)]);
