@@ -499,7 +499,16 @@ one removal merged ahead of the decision to allow it.
   `share`, `bundle`, `snapshot`, `standalone`) MAY suggest
   `experimental export`, labeled experimental, and never runs it, because
   people and agents who type those words mean that command; the exception
-  ends when the command graduates or is removed.
+  ends when the command graduates or is removed. A third named exception covers sharing a page as one HTML file: the CLI's
+  two guides that teach it (`cli/experimental/share-a-page` and
+  `cli/experimental/export-pages`) set `searchable: true`, and no other doc
+  may. In an Astryx project (one that installs or declares `@astryxdesign/core`
+  or `@astryxdesign/cli`), or outside any package (no package.json at or
+  above the folder), `astryx search`, the `search()` API and an index
+  `exportSearchIndex()` makes there MAY return each of them as one entry,
+  whose own text says it is experimental; in a package without Astryx none of
+  them returns the guides, and every other experimental doc stays out of
+  search. This exception ends when that command graduates or is removed.
 - **FR28 — A planned minor needs no prior deprecation; a patch does.** A change
   landing in a declared minor needs no deprecation path: its `[breaking]` Changeset
   describing the change, with the replacement and migration where they help the
