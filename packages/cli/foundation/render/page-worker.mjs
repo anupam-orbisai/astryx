@@ -817,7 +817,8 @@ function reachesLink(p) {
 
 /**
  * The literals a file hands to the URL API (`new URL(…)`, `URL.parse(…)`,
- * also through `globalThis`, `window` or `self`). The render traces an
+ * also through `globalThis`, `window` or `self`), as the address or as its
+ * base. The render traces an
  * argument only through forms it can read whole: a literal, a template, `+`,
  * a choice (`a ? b : c`, `a || b`), a variable set once, and a parameter of
  * a function only this file calls, with its default value. The API writes a
@@ -915,10 +916,12 @@ function urlApiLiterals(program, filename) {
       callee.object.type === 'Identifier' &&
       ['globalThis', 'window', 'self'].includes(callee.object.name) &&
       memberName(callee) === 'URL');
+  // The address and its base (`new URL(name, base)`) both reach the API.
   /** @param {any} p */
   const argument = p => {
     site = p;
     follow(p.get('arguments.0'), 0);
+    if (p.node.arguments.length > 1) follow(p.get('arguments.1'), 0);
   };
   program.traverse({
     NewExpression(/** @type {any} */ p) {

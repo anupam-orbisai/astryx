@@ -1399,6 +1399,68 @@ describe('a render with images from the web', () => {
     }
   }, 180_000);
 
+  it('keeps an address the URL API takes as a base as written', async () => {
+    const dir = makeLinkedFixture('astryx-render-url-api-base-', [
+      'react',
+      'react-dom',
+    ]);
+    try {
+      const file = path.join(dir, 'page.jsx');
+      fs.writeFileSync(
+        file,
+        [
+          "const hero = 'https://cdn.example.com/dir/hero.png';",
+          'export default function Page() {',
+          "  const thumb = new URL('thumb.png', hero);",
+          '  return <main><img src={hero} alt="Hero" /><p>{thumb.href}</p></main>;',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      const {fetch} = fetchFrom({
+        'https://cdn.example.com/dir/hero.png': png(),
+      });
+      const page = await renderPage(file, {cwd: dir, remoteImages: {fetch}});
+      const data = `data:image/png;base64,${PNG.toString('base64')}`;
+      const script = page.html.slice(page.html.lastIndexOf('<script>'));
+      // A data: URI cannot be a base, so the script keeps the address.
+      expect(script).toContain('https://cdn.example.com/dir/hero.png');
+      expect(script).not.toContain(`${data}#`);
+      expect(
+        page.warnings.some(w =>
+          w.message.startsWith(
+            "'https://cdn.example.com/dir/hero.png' (page.jsx:1) is an image address the page changes with the URL API",
+          ),
+        ),
+      ).toBe(true);
+      expect(page.remoteImages?.failed.map(f => f.url)).toEqual([
+        'https://cdn.example.com/dir/hero.png',
+      ]);
+    } finally {
+      removeLinkedFixture(dir);
+    }
+  }, 120_000);
+
+  it('gives no warning for an untraced URL API call when the page names no remote image', async () => {
+    const dir = makeLinkedFixture('astryx-render-url-api-none-', [
+      'react',
+      'react-dom',
+    ]);
+    try {
+      const file = path.join(dir, 'page.jsx');
+      fs.writeFileSync(
+        file,
+        'export default function Page() { return <main><button onClick={() => console.log(new URL(window.location.href).hash)}>Go</button></main>; }\n',
+      );
+      const {fetch} = fetchFrom({});
+      const page = await renderPage(file, {cwd: dir, remoteImages: {fetch}});
+      expect(page.warnings.filter(w => w.code === 'remote-asset')).toEqual([]);
+      expect(page.remoteImages).toBeUndefined();
+    } finally {
+      removeLinkedFixture(dir);
+    }
+  }, 120_000);
+
   it('reads new globalThis.URL as the URL API', async () => {
     const dir = makeLinkedFixture('astryx-render-url-api-global-', [
       'react',

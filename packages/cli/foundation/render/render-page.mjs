@@ -1211,13 +1211,13 @@ export async function renderPage(entry, options = {}) {
   // address may reach it: the script keeps every https image address as
   // written.
   const untraced = /** @type {{file: string, line: number} | null} */ (message.urlApiUntraced ?? null);
+  /** How many addresses the untraced fallback keeps as written. */
+  let untracedKept = 0;
   if (untraced) {
-    for (const url of /** @type {string[]} */ (message.remoteLiterals ?? [])) keptAsWritten.add(url);
-    const where = `${path.relative(dir, untraced.file).split(path.sep).join('/')}:${untraced.line}`;
-    warnings.push({
-      code: 'remote-asset',
-      message: `The page hands the URL API an address the render cannot trace (${where}), so the page's script keeps each https image address as written: the file asks the network for those images when the script draws them. Save the images beside the page and import them.`,
-    });
+    for (const url of /** @type {string[]} */ (message.remoteLiterals ?? [])) {
+      if (!keptAsWritten.has(url)) untracedKept++;
+      keptAsWritten.add(url);
+    }
   }
   // The images the markup, the page's own CSS and its literals name are
   // asked for together, so a machine with no network waits for one answer
@@ -1334,6 +1334,7 @@ export async function renderPage(entry, options = {}) {
     for (const url of [...ctx.rewrites.keys()]) {
       if (!/^https:\/\//i.test(url)) continue;
       ctx.rewrites.delete(url);
+      untracedKept++;
       // A first-paint image: the markup carries it, the script draws it from
       // the network. A `srcset` value names each of its candidates.
       const urls = /\s/.test(url) ? parseSrcset(url).map(c => c.url).filter(u => /^https:\/\//i.test(u)) : [url];
@@ -1341,6 +1342,14 @@ export async function renderPage(entry, options = {}) {
         remote?.keep(one, 'the page hands the URL API an address the render cannot trace, so the script keeps each address as written');
       }
     }
+  }
+  // One warning, only when the fallback keeps an address.
+  if (untraced && untracedKept > 0) {
+    const where = `${path.relative(dir, untraced.file).split(path.sep).join('/')}:${untraced.line}`;
+    warnings.push({
+      code: 'remote-asset',
+      message: `The page hands the URL API an address the render cannot trace (${where}), so the page's script keeps each https image address as written: the file asks the network for those images when the script draws them. Save the images beside the page and import them.`,
+    });
   }
   // The script draws the page again with the paths the page wrote, so each
   // image the first paint shows from its carried data keeps showing.
