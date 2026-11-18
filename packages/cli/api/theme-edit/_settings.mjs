@@ -20,6 +20,7 @@ import {
   cssNumber,
   cssProperties,
   longhandsOf,
+  sidesOf,
 } from './_css.mjs';
 import postcss from 'postcss';
 import {createRequire} from 'node:module';
@@ -33,6 +34,7 @@ import {ERROR_CODES} from '../../foundation/response/error-codes.mjs';
 import {cssUnescape} from '../../foundation/text/css-escape.mjs';
 import {levenshteinDistance} from '../../foundation/text/levenshtein.mjs';
 import {
+  BAR_REACH_THINGS,
   barRows,
   blockSides,
   coreVarValues,
@@ -8067,9 +8069,7 @@ function barReach(ctx, theme, data) {
         x.source === 'property' &&
         !x.when &&
         !x.state &&
-        /^(height|min-height|block-size|padding(-block|-top|-bottom)?(-start|-end)?)$/.test(
-          x.thing,
-        ) &&
+        BAR_REACH_THINGS.test(x.thing) &&
         partsOf(ctx, x).includes(holder),
     );
     if (exact) continue;
@@ -8224,9 +8224,6 @@ function layerParts(layer) {
   return {image: layer.slice(0, end + 1), position, size, repeat};
 }
 
-/** A side word in a longhand's name, in the order a box value lists sides. */
-const BOX_SIDES = ['top', 'right', 'bottom', 'left'];
-
 /**
  * The fills made from the surface: they follow a surface the theme sets,
  * at the base theme's lightness step from it.
@@ -8318,33 +8315,6 @@ function laterLonghandsAsSides(b, baseBlock) {
   if (!changed) return;
   for (const k of Object.keys(b)) delete b[k];
   Object.assign(b, out);
-}
-
-/**
- * A two-sided (start/end) or four-sided (top/right/bottom/left) longhand's
- * value, as each side's property and value by the shorthand rules; null for
- * any other property.
- * @param {string} prop kebab-case
- * @param {string} v
- * @returns {Record<string, string> | null}
- */
-function sidesOf(prop, v) {
-  const direct = [...longhandsOf(prop)].filter(p => longhandsOf(p).size === 0);
-  const w = splitTop(v.trim(), ' ').map(x => x.trim());
-  if (!w.length || /!important/i.test(v)) return null;
-  const start = direct.find(p => /-start(-|$)/.test(p));
-  const end = direct.find(p => /-end(-|$)/.test(p));
-  if (direct.length === 2 && start && end && w.length <= 2)
-    return {[start]: w[0], [end]: w[1] ?? w[0]};
-  const named = BOX_SIDES.map(side =>
-    direct.find(p => new RegExp(`-${side}(-|$)`).test(p)),
-  );
-  if (direct.length !== 4 || named.some(x => !x) || w.length > 4) return null;
-  const [t, r = t, bo = t, l = r] = w;
-  const vals = [t, r, bo, l];
-  return Object.fromEntries(
-    named.map((p, i) => [/** @type {string} */ (p), vals[i]]),
-  );
 }
 
 /** Core's default type scale ratio. */
