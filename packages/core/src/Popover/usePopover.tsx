@@ -31,7 +31,8 @@ import {watchOutsidePans} from '../Layer/outsidePanClaim';
 import {useIsomorphicLayoutEffect} from '../hooks/useIsomorphicLayoutEffect';
 import {resolvePopoverAnchor, type PopoverAnchor} from './popoverAnchor';
 import {useFocusTrapInternal} from '../hooks/useFocusTrap';
-import {useCommittedRef} from '../hooks/useCommittedRef';
+import {useCommittedRef, useCommittedRefInto} from '../hooks/useCommittedRef';
+import {isHTMLElement} from '../utils/nodeType';
 import {LayerDepthProvider} from '../Layer/LayerDepthContext';
 import type {StyleXStyles} from '@stylexjs/stylex';
 import {
@@ -186,6 +187,22 @@ export interface UsePopoverOptions {
    * Omit it and the trigger is the anchor.
    */
   anchor?: PopoverAnchor;
+
+  /**
+   * What the popover does while its anchor is out of view — scrolled out of
+   * the viewport or out of a scrolling panel, or removed.
+   *
+   * - `'stay'`: the popover keeps its place and size while the anchor is
+   *   scrolled out of view. A ref anchor that is removed hides it, as any
+   *   popover whose anchor is gone shows no surface.
+   * - `'hideWhileOutOfView'`: the popover is hidden and takes no pointer
+   *   input. It stays open (no `onHide`) and shows again in place when the
+   *   anchor returns. Focus inside it moves to the anchor when the anchor
+   *   takes focus, else to the trigger.
+   *
+   * @default 'stay'
+   */
+  anchorOutOfViewBehavior?: 'stay' | 'hideWhileOutOfView';
 
   /**
    * Callback fired when popover is shown.
@@ -497,6 +514,7 @@ function usePopoverImplementation(
 ): UsePopoverReturn {
   const {
     anchor,
+    anchorOutOfViewBehavior = 'stay',
     onShow,
     onHide,
     onCloseStart,
@@ -551,6 +569,12 @@ function usePopoverImplementation(
   }, [onShow]);
 
   // Core layer for popover positioning
+  // Filled in once the content ref exists; the layer calls it as the surface
+  // hides with its anchor.
+  const anchorHiddenRef = useRef<(() => void) | null>(null);
+  const handleAnchorHidden = useCallback(() => {
+    anchorHiddenRef.current?.();
+  }, []);
   const layer = useLayerInternal({
     mode: 'context',
     lightDismiss: hasLightDismiss,
@@ -562,6 +586,8 @@ function usePopoverImplementation(
     writesEntranceSide,
     onOpenPendingChange,
     waitsForAnchor: anchor != null,
+    hidesWithAnchor: anchorOutOfViewBehavior === 'hideWhileOutOfView',
+    onAnchorHidden: handleAnchorHidden,
   });
 
   // Focus trap for the popover content. Escape stays registered while light
@@ -651,6 +677,31 @@ function usePopoverImplementation(
     },
     [anchorOptionRef, layerRef],
   );
+  // Focus leaves a surface that hides with its anchor: to the anchor when it
+  // takes focus, else the trigger. Focus does not scroll the hidden anchor
+  // back into view.
+  const moveFocusOutOfHiddenSurface = () => {
+    const container = contentRef.current;
+    const doc = container?.ownerDocument;
+    const active = doc?.activeElement ?? null;
+    if (container == null || active == null || !container.contains(active)) {
+      return;
+    }
+    const candidates = [
+      anchorOptionRef.current == null ? null : boundAnchorRef.current,
+      triggerElementRef.current,
+    ];
+    for (const candidate of candidates) {
+      if (isHTMLElement(candidate) && candidate.tabIndex >= 0) {
+        candidate.focus({preventScroll: true});
+        if (doc?.activeElement === candidate) {
+          return;
+        }
+      }
+    }
+  };
+  useCommittedRefInto(anchorHiddenRef, moveFocusOutOfHiddenSurface);
+
   const bindAnchor = useCallback(() => {
     const option = anchorOptionRef.current;
     if (option == null) {
