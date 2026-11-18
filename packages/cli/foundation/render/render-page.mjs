@@ -1213,6 +1213,18 @@ export async function renderPage(entry, options = {}) {
     keptAsWritten.add(keyed.value);
     builtList.push({text: keyed.text, file: keyed.file, line: keyed.line, how: 'url'});
   }
+  // When the page hands the URL API an address the render cannot trace (a
+  // callback's parameter, an import), any address may reach it: the script
+  // keeps every https image address as written.
+  const untraced = /** @type {{file: string, line: number} | null} */ (message.urlApiUntraced ?? null);
+  if (untraced) {
+    for (const url of /** @type {string[]} */ (message.remoteLiterals ?? [])) keptAsWritten.add(url);
+    const where = `${path.relative(dir, untraced.file).split(path.sep).join('/')}:${untraced.line}`;
+    warnings.push({
+      code: 'remote-asset',
+      message: `The page hands the URL API an address the render cannot trace (${where}), so the page's script keeps each https image address as written: the file asks the network for those images when the script draws them. Save the images beside the page and import them.`,
+    });
+  }
   // The images the markup, the page's own CSS and its literals name are
   // asked for together, so a machine with no network waits for one answer
   // window, not one per text.
@@ -1316,6 +1328,9 @@ export async function renderPage(entry, options = {}) {
   // The script keeps such an address as written, also where the first paint
   // carries it.
   for (const url of keptAsWritten) ctx.rewrites.delete(url);
+  if (untraced) {
+    for (const url of [...ctx.rewrites.keys()]) if (/^https:\/\//i.test(url)) ctx.rewrites.delete(url);
+  }
   // The script draws the page again with the paths the page wrote, so each
   // image the first paint shows from its carried data keeps showing.
   // In the script, a carried https address becomes its data: URI with an

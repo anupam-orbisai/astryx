@@ -958,6 +958,114 @@ describe('a render with images from the web', () => {
     }
   }, 120_000);
 
+  it('keeps every script address as written when the URL API gets an address the render cannot trace', async () => {
+    const dir = makeLinkedFixture('astryx-render-url-api-untraced-', [
+      'react',
+      'react-dom',
+    ]);
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'sized.js'),
+        "export function sized(src) {\n  const url = new URL(src);\n  url.searchParams.set('w', '200');\n  return url.href;\n}\n",
+      );
+      const pages = {
+        // A callback's parameter.
+        'callback.jsx': [
+          "import {useState} from 'react';",
+          "const gallery = ['https://cdn.example.com/g.png'];",
+          'export default function Page() {',
+          '  const [open, setOpen] = useState(false);',
+          '  const sized = gallery.map(src => {',
+          '    const url = new URL(src);',
+          "    url.searchParams.set('w', '200');",
+          '    return url.href;',
+          '  });',
+          '  return <main><button onClick={() => setOpen(true)}>Show</button>{open && <img src={sized[0]} alt="" />}</main>;',
+          '}',
+          '',
+        ],
+        // A helper another file exports.
+        'imported.jsx': [
+          "import {useState} from 'react';",
+          "import {sized} from './sized.js';",
+          "const photo = 'https://cdn.example.com/g.png';",
+          'export default function Page() {',
+          '  const [open, setOpen] = useState(false);',
+          '  return <main><button onClick={() => setOpen(true)}>Show</button>{open && <img src={sized(photo)} alt="" />}</main>;',
+          '}',
+          '',
+        ],
+      };
+      for (const [name, lines] of Object.entries(pages)) {
+        const file = path.join(dir, name);
+        fs.writeFileSync(file, lines.join('\n'));
+        const {fetch, asked} = fetchFrom({
+          'https://cdn.example.com/g.png': png(),
+        });
+        const page = await renderPage(file, {cwd: dir, remoteImages: {fetch}});
+        expect(asked, name).toEqual([]);
+        expect(
+          page.html.slice(page.html.lastIndexOf('<script>')),
+          name,
+        ).toContain('https://cdn.example.com/g.png');
+        expect(
+          page.warnings.filter(
+            w =>
+              w.code === 'remote-asset' && w.message.includes('cannot trace'),
+          ),
+          name,
+        ).toHaveLength(1);
+      }
+    } finally {
+      removeLinkedFixture(dir);
+    }
+  }, 180_000);
+
+  it('reads new globalThis.URL as the URL API', async () => {
+    const dir = makeLinkedFixture('astryx-render-url-api-global-', [
+      'react',
+      'react-dom',
+    ]);
+    try {
+      const file = path.join(dir, 'page.jsx');
+      fs.writeFileSync(
+        file,
+        [
+          "import {useState} from 'react';",
+          "const photo = 'https://cdn.example.com/g.png';",
+          'export default function Page() {',
+          '  const [open, setOpen] = useState(false);',
+          '  const url = new globalThis.URL(photo);',
+          "  url.searchParams.set('w', '200');",
+          '  return <main><button onClick={() => setOpen(true)}>Show</button>{open && <img src={url.href} alt="" />}</main>;',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      const {fetch, asked} = fetchFrom({
+        'https://cdn.example.com/g.png': png(),
+      });
+      const page = await renderPage(file, {cwd: dir, remoteImages: {fetch}});
+      expect(asked).toEqual([]);
+      expect(page.html.slice(page.html.lastIndexOf('<script>'))).toContain(
+        'https://cdn.example.com/g.png',
+      );
+      const messages = page.warnings
+        .filter(w => w.code === 'remote-asset')
+        .map(w => w.message);
+      expect(
+        messages.some(m =>
+          m.startsWith(
+            "'https://cdn.example.com/g.png' (page.jsx:2) is an image address the page changes with the URL API",
+          ),
+        ),
+      ).toBe(true);
+      expect(messages.some(m => m.includes('cannot trace'))).toBe(false);
+    } finally {
+      removeLinkedFixture(dir);
+    }
+  }, 120_000);
+
   it('names the whole address of first-paint images that differ only by their query', async () => {
     const dir = makeLinkedFixture('astryx-render-query-two-', [
       'react',
