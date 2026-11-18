@@ -239,6 +239,7 @@ export default function Page() {
       <div onClick={() => setHash('card')}>
         <a href="#big" onClick={e => e.stopPropagation()}>Stopped</a>
       </div>
+      <div id="plain-card" />
       <a href="#café" onClick={() => document.getElementById('opener')?.click()}>Open then go</a>
       <a href="#café">Café</a>
       <a href="#100%">Hundred</a>
@@ -298,6 +299,16 @@ export default function Page() {
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.href).toBe('about:srcdoc#big');
     expect(doc.getElementById('hash')?.textContent).toBe('#big');
+    // A link whose handler stops the click and cancels it without
+    // preventDefault (\`return false\`, \`returnValue = false\`) stays put.
+    const card = /** @type {HTMLElement} */ (doc.getElementById('plain-card'));
+    card.innerHTML =
+      '<a id="falsy" href="#café" onclick="event.stopPropagation(); return false">False</a>' +
+      '<a id="rv" href="#café" onclick="event.stopPropagation(); event.returnValue = false">Return value</a>';
+    click('False');
+    click('Return value');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.href).toBe('about:srcdoc#big');
     // The same link again is a move to the same place, still inside the file.
     expect(click('Big only').defaultPrevented).toBe(true);
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
