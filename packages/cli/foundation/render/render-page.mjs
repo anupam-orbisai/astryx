@@ -1213,8 +1213,12 @@ export async function renderPage(entry, options = {}) {
   const untraced = /** @type {{file: string, line: number} | null} */ (message.urlApiUntraced ?? null);
   /** How many addresses the untraced fallback keeps as written. */
   let untracedKept = 0;
+  // An address that counts only by an image word in a name around it may be
+  // an API's: it is decided once its answer is known.
+  const namedOnlyNames = new Set(/** @type {string[]} */ (message.remoteNamedOnly ?? []));
   if (untraced) {
     for (const url of /** @type {string[]} */ (message.remoteLiterals ?? [])) {
+      if (namedOnlyNames.has(url)) continue;
       if (!keptAsWritten.has(url)) untracedKept++;
       keptAsWritten.add(url);
     }
@@ -1274,6 +1278,12 @@ export async function renderPage(entry, options = {}) {
       const fetched = remote.results.get(url);
       if (!fetched) continue;
       if ('uri' in fetched) {
+        // An image the untraced fallback keeps as written.
+        if (untraced) {
+          if (!keptAsWritten.has(url)) untracedKept++;
+          keptAsWritten.add(url);
+          continue;
+        }
         if (!ctx.rewrites.has(url)) ctx.rewrites.set(url, fetched.uri);
         continue;
       }

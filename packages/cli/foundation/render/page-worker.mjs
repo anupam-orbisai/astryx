@@ -879,6 +879,8 @@ function urlApiLiterals(program, filename) {
       follow(at.get('expression'), depth + 1);
       return;
     }
+    // The browser's own address holds no address the page writes.
+    if (readsBrowserAddress(at)) return;
     const binding = at.isIdentifier() ? at.scope.getBinding(n.name) : null;
     if (!binding || binding.kind === 'module' || binding.constantViolations.length > 0) {
       untraced(at);
@@ -933,6 +935,35 @@ function urlApiLiterals(program, filename) {
     },
   });
   return nodes;
+}
+
+/**
+ * Whether an expression reads the browser's own address (`location`,
+ * `location.origin`, `window.location.href`, `document.baseURI`,
+ * `import.meta.url`), which holds no address the page writes. A name the
+ * page declares itself (its own `location`) does not count.
+ * @param {any} at
+ */
+function readsBrowserAddress(at) {
+  const n = at.node;
+  if (n.type === 'Identifier') return n.name === 'location' && !at.scope.getBinding('location');
+  if (n.type !== 'MemberExpression' && n.type !== 'OptionalMemberExpression') return false;
+  if (n.object.type === 'MetaProperty') return memberName(n) === 'url';
+  /** @type {string[]} */
+  const names = [];
+  let root = n;
+  while (root.type === 'MemberExpression' || root.type === 'OptionalMemberExpression') {
+    const name = memberName(root);
+    if (name === null) return false;
+    names.unshift(name);
+    root = root.object;
+  }
+  if (root.type !== 'Identifier' || at.scope.getBinding(root.name)) return false;
+  const chain = ['window', 'self', 'globalThis'].includes(root.name) ? names : [root.name, ...names];
+  if (chain[0] === 'location') return chain.length <= 2;
+  if (chain[0] !== 'document') return false;
+  if (chain[1] === 'location') return chain.length <= 3;
+  return chain.length === 2 && ['baseURI', 'URL', 'documentURI'].includes(chain[1]);
 }
 
 /**
