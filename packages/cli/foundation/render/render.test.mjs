@@ -369,6 +369,14 @@ describe('scanHtml', () => {
     expect(closed).toEqual([false, false, true]);
   });
 
+  it('reads HTML again in an svg or MathML integration point and after a breakout tag', () => {
+    expect(pieces('<svg><foreignObject><textarea/><img src="a.png"></textarea></foreignObject></svg>')).toContain('raw:<img src="a.png">');
+    expect(pieces('<math><mi><iframe/><img src="a.png"></iframe></mi></math>')).toContain('raw:<img src="a.png">');
+    expect(pieces('<svg><p><title/><img src="a.png"></title></svg>')).toContain('raw:<img src="a.png">');
+    // In svg itself, /> closes the tag and svg's <title> holds markup.
+    expect(pieces('<svg><path/><title>t</title></svg>')).toEqual(['start:<svg>', 'start:<path/>', 'start:<title>', 'text:t', 'end:</title>', 'end:</svg>']);
+  });
+
   it('says where each attribute is', () => {
     const html = `<span data-tip='<img src="a.png">' id=b>`;
     const [tag] = /** @type {any[]} */ ([...scanHtml(html)]);

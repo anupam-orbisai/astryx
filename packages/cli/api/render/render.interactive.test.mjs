@@ -476,6 +476,12 @@ const SHAPES = [
   \`<noscript/>\${IMG}</noscript>\`,
   \`<template/>\${IMG}</template>\`,
   \`<svg><foreignObject><div></svg><![CDATA[ a > \${IMG} ]]></div></foreignObject></svg>\`,
+  \`<svg><foreignObject><textarea/>\${IMG}</textarea></foreignObject></svg>\`,
+  \`<svg><desc><noscript/>\${IMG}</noscript></desc></svg>\`,
+  \`<svg><title><template/>\${IMG}</template></title></svg>\`,
+  \`<math><mi><iframe/>\${IMG}</iframe></mi></math>\`,
+  \`<math><mtext><style/>\${IMG}</style></mtext></math>\`,
+  \`<svg><p><title/>\${IMG}</title></svg>\`,
 ];
 export default function Page() {
   return (

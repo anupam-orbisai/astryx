@@ -1074,7 +1074,6 @@ const UNBUILT = new Set(['noscript', 'template', 'select']);
  * @returns {[number, number][]}
  */
 function unread(text) {
-  if (text === unreadOf.text) return unreadOf.ranges;
   /** @type {[number, number][]} */
   const ranges = [];
   /** @type {string[]} */
@@ -1102,13 +1101,8 @@ function unread(text) {
     if (open.length === 0) ranges.push([start, piece.end]);
   }
   if (open.length > 0) ranges.push([start, text.length]);
-  unreadOf.text = text;
-  unreadOf.ranges = ranges;
   return ranges;
 }
-
-/** The last text {@link unread} read: one markup pass asks for it per attribute. */
-const unreadOf = {text: '', ranges: /** @type {[number, number][]} */ ([])};
 
 
 /**

@@ -154,13 +154,39 @@ function scriptEnd(html, from) {
   return html.length;
 }
 
+/** The svg elements whose content is HTML: its HTML integration points. */
+const SVG_HTML = new Set(['foreignobject', 'desc', 'title']);
+
+/** The MathML elements whose content is HTML (text integration points). */
+const MATH_HTML = new Set(['mi', 'mo', 'mn', 'ms', 'mtext']);
+
+/** The start tags that end svg or MathML content, as the tree builder reads them. */
+const BREAKOUT = new Set([
+  'b', 'big', 'blockquote', 'body', 'br', 'center', 'code', 'dd', 'div', 'dl', 'dt', 'em', 'embed',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'hr', 'i', 'img', 'li', 'listing', 'menu', 'meta',
+  'nobr', 'ol', 'p', 'pre', 'ruby', 's', 'small', 'span', 'strong', 'strike', 'sub', 'sup',
+  'table', 'tt', 'u', 'ul', 'var',
+]);
+
+/**
+ * Whether a start tag in svg or MathML content ends it: a breakout tag, or a
+ * `<font>` with a color, face or size.
+ * @param {string} tag
+ * @param {Array<[string, string]>} attrs
+ */
+const breaksOut = (tag, attrs) =>
+  BREAKOUT.has(tag) || (tag === 'font' && attrs.some(([name]) => name === 'color' || name === 'face' || name === 'size'));
+
 /**
  * Split an HTML document into its pieces, in order, as a browser does for
  * the markup a render writes. A comment ends at the first `-->` after its
  * `<!--` (so `<!-->` and `<!--->` are whole comments), or at the end. A bogus
  * comment (`<?…`, a `<!` that starts no comment or doctype, or `</` before a
- * character that is not a letter) is a comment to the next `>`; inside
- * `<svg>` or `<math>`, `<![CDATA[` is a `cdata` piece to `]]>`. The content
+ * character that is not a letter) is a comment to the next `>`. Inside svg
+ * or MathML content, `<![CDATA[` is a `cdata` piece to `]]>`, `/>` closes a
+ * tag and no element holds raw text; an HTML integration point
+ * (`<foreignObject>`, `<desc>`, svg `<title>`, `<mi>`, `<mo>`, `<mn>`, `<ms>`,
+ * `<mtext>`) and a breakout tag (`<p>`, `<div>`…) return to HTML. The content
  * of a raw-text element up to its end tag is one `raw` piece, so a tag or a
  * comment in a stylesheet is text; `<plaintext>` makes the rest of the
  * document one `raw` piece. A `<` that starts no tag is
@@ -173,11 +199,17 @@ export function* scanHtml(html) {
   const n = html.length;
   let at = 0;
   let text = 0;
-  // Inside <svg> or <math>, `<![CDATA[` opens a CDATA section to `]]>`. An
-  // end tag closes only a root of its own name that is open, as the tree
-  // builder reads it: a stray `</svg>` in <math> stays in MathML.
-  /** @type {string[]} */
-  const foreign = [];
+  // The open svg and MathML elements, and the HTML integration points among
+  // them, as the tree builder keeps them: inside svg or math (`foreign`), a
+  // tag is foreign, `/>` closes it and `<![CDATA[` runs to `]]>`; in an
+  // integration point, and after a breakout tag closes the foreign elements,
+  // the content is HTML again.
+  /** @type {Array<{ns: 'svg' | 'math' | 'html', tag: string}>} */
+  const open = [];
+  const foreign = () => open.length > 0 && open[open.length - 1].ns !== 'html';
+  const breakOut = () => {
+    while (foreign()) open.pop();
+  };
   while (at < n) {
     const lt = html.indexOf('<', at);
     if (lt < 0) break;
@@ -188,7 +220,7 @@ export function* scanHtml(html) {
     if (html.startsWith('<!--', lt)) {
       const close = html.indexOf('-->', lt + 2);
       token = {kind: 'comment', start: lt, end: close < 0 ? n : close + 3};
-    } else if (foreign.length > 0 && html.startsWith('<![CDATA[', lt)) {
+    } else if (foreign() && html.startsWith('<![CDATA[', lt)) {
       const close = html.indexOf(']]>', lt + 9);
       token = {kind: 'cdata', start: lt, end: close < 0 ? n : close + 3};
     } else if (DOCTYPE.test(html)) {
@@ -202,6 +234,7 @@ export function* scanHtml(html) {
       const closing = next === '/';
       const read = readTag(html, lt + (closing ? 2 : 1));
       if (read === 'open') break;
+      if (foreign() && (closing ? read.tag === 'p' || read.tag === 'br' : breaksOut(read.tag, read.attrs))) breakOut();
       token = closing
         ? {kind: 'end', tag: read.tag, start: lt, end: read.end}
         : {
@@ -209,8 +242,8 @@ export function* scanHtml(html) {
             tag: read.tag,
             attrs: read.attrs,
             spans: read.spans,
-            // A browser honours `/>` only in svg or math (and on their roots).
-            selfClosing: read.selfClosing && (foreign.length > 0 || read.tag === 'svg' || read.tag === 'math'),
+            // A browser honours `/>` only on svg and MathML elements.
+            selfClosing: read.selfClosing && (foreign() || read.tag === 'svg' || read.tag === 'math'),
             start: lt,
             end: read.end,
           };
@@ -222,16 +255,32 @@ export function* scanHtml(html) {
     if (lt > text) yield {kind: 'text', start: text, end: lt};
     yield token;
     at = text = token.end;
-    if ((token.kind === 'start' || token.kind === 'end') && (token.tag === 'svg' || token.tag === 'math')) {
-      if (token.kind === 'start' && !token.selfClosing) foreign.push(token.tag);
-      else if (token.kind === 'end' && foreign.includes(token.tag)) foreign.length = foreign.lastIndexOf(token.tag);
+    if (token.kind === 'start' && foreign()) {
+      const ns = open[open.length - 1].ns === 'math' ? 'math' : 'svg';
+      if (!token.selfClosing) open.push({ns: (ns === 'svg' ? SVG_HTML : MATH_HTML).has(token.tag) ? 'html' : ns, tag: token.tag});
+      continue;
+    }
+    if (token.kind === 'start' && (token.tag === 'svg' || token.tag === 'math')) {
+      if (!token.selfClosing) open.push({ns: token.tag, tag: token.tag});
+      continue;
+    }
+    if (token.kind === 'end') {
+      // An end tag closes an open element of its name above the nearest
+      // HTML content, or the integration point it is in; else nothing.
+      for (let k = open.length - 1; k >= 0; k--) {
+        if (open[k].tag === token.tag) {
+          open.length = k;
+          break;
+        }
+        if (open[k].ns === 'html') break;
+      }
+      continue;
     }
     if (token.kind === 'start' && token.tag === 'plaintext') {
       if (at < n) yield {kind: 'raw', start: at, end: n};
       return;
     }
-    // A self-closing raw-text element (an SVG `<title />`) holds nothing.
-    if (token.kind === 'start' && RAW_TEXT.has(token.tag) && !token.selfClosing) {
+    if (token.kind === 'start' && RAW_TEXT.has(token.tag)) {
       const stop = token.tag === 'script' ? scriptEnd(html, at) : endTagAt(html, token.tag, at);
       yield {kind: 'raw', start: at, end: stop};
       at = text = stop;
