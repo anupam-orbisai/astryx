@@ -128,6 +128,20 @@ export function registerExperimentalRender(group, program) {
           ...(d.warnings.length > 0
             ? [section('Warnings'), list(d.warnings.map(w => w.message))]
             : []),
+          section('Checks'),
+          ...(d.checks.outside.length === 0
+            ? [text("The file's markup and stylesheets load nothing from outside the file.")]
+            : [record({outside: d.checks.outside.join(', ')})]),
+          record({
+            exact: d.checks.roundTrip.exact
+              ? `yes: --reverse gives back all ${d.checks.roundTrip.files} carried files byte for byte`
+              : `no: ${d.checks.roundTrip.differs.join(', ')} differ${d.checks.roundTrip.differs.length === 1 ? 's' : ''} from the files on disk`,
+          }),
+          text(
+            d.checks.outside.length === 0
+              ? `Share this one file: ${d.output} (${kb(d.bytes)}), at ${path.resolve(d.output)}. Nothing else needs to go with it.`
+              : `${d.output} (${kb(d.bytes)}) loads ${d.checks.outside.join(', ')} from outside the file when it opens, so it does not stand alone.`,
+          ),
           text(`Give it back: ${run} experimental render --reverse ${shellArg(d.output)}${restoreHere(d)}`),
         );
         return answered;
