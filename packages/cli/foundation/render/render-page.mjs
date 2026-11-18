@@ -39,7 +39,7 @@ import {LINK_OUT, ROOT_ID} from './client-bundle.mjs';
 import {remoteImages} from './remote-images.mjs';
 import {ESBUILD_MISSING, findEsbuild} from './esbuild-dependency.mjs';
 import {carriedNameFor, embeddedPathProblem} from './embedded-files.mjs';
-import {scanHtml} from './html-reader.mjs';
+import {scanHtml, VOID} from './html-reader.mjs';
 import {removeOnStop} from '../fs/stop-cleanup.mjs';
 import {aliasOnly, assetRefsOf} from './embedded-imports.mjs';
 import {babelParser} from '../runtime/lazy-dependencies.mjs';
@@ -1101,7 +1101,39 @@ function unread(text) {
     if (open.length === 0) ranges.push([start, piece.end]);
   }
   if (open.length > 0) ranges.push([start, text.length]);
+  const off = offScript(text);
+  if (off >= 0) ranges.push([off, text.length]);
   return ranges;
+}
+
+/**
+ * Where `text` first holds a shape a serializer such as React's never writes,
+ * or -1: an end tag that does not close the element open last, CDATA, a
+ * bogus comment, a self-closing HTML tag that is not void, `<plaintext>` or
+ * `<frameset>`. Up to that point the scanner and a browser agree on the
+ * elements; past it they may not, so nothing after it marks a carried
+ * value, and each image there keeps its own copy in the script. A gap in
+ * the scanner then costs bytes, never a missing picture.
+ * @param {string} text
+ * @returns {number}
+ */
+function offScript(text) {
+  /** @type {string[]} */
+  const open = [];
+  for (const piece of scanHtml(text)) {
+    const written = text.slice(piece.start, piece.end);
+    if (piece.kind === 'cdata' || (piece.kind === 'comment' && !written.startsWith('<!--'))) return piece.start;
+    if (piece.kind === 'start') {
+      if (piece.tag === 'plaintext' || piece.tag === 'frameset') return piece.start;
+      if (VOID.has(piece.tag)) continue;
+      if (written.endsWith('/>') && !piece.selfClosing) return piece.start;
+      if (!piece.selfClosing) open.push(piece.tag);
+    } else if (piece.kind === 'end') {
+      if (open[open.length - 1] !== piece.tag) return piece.start;
+      open.pop();
+    }
+  }
+  return -1;
 }
 
 

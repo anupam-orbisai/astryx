@@ -401,6 +401,46 @@ export default function Page() {
     expect(read('pictured-back/pictured.tsx')).not.toContain(CARRY_ATTR);
   }, 120_000);
 
+  it('marks nothing after markup a serializer never writes, so every later image keeps its own copy', async () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64');
+    put('src/gate/before.png', png);
+    put('src/gate/after.png', Buffer.concat([png, Buffer.from([1])]));
+    const shapes = {
+      // astracat's two: an end tag for an element open below an svg root,
+      // and </foreignObject> with a <span> open.
+      'svg-unclosed': '<svg><rect width="1" height="1"/>',
+      'span-in-foreign': '<svg><foreignObject><span></foreignObject></span></foreignObject></svg>',
+      'stray-end': '<b>bold</i></b>',
+      cdata: '<svg><![CDATA[ a ]]></svg>',
+      'bogus-comment': '<?x ?>',
+      'self-closing-html': '<span/>text',
+      frameset: '<frameset></frameset>',
+      plaintext: '<plaintext>',
+    };
+    for (const [name, html] of Object.entries(shapes)) {
+      put(
+        `src/gate/${name}.tsx`,
+        `export default function Page() {
+  return (
+    <main>
+      <img src="./before.png" alt="Before" />
+      <div dangerouslySetInnerHTML={{__html: ${JSON.stringify(html)}}} />
+      <img src="./after.png" alt="After" />
+    </main>
+  );
+}
+`,
+      );
+      await render(`src/gate/${name}.tsx`, {cwd: dir, out: `gate-${name}.html`});
+      const file = read(`gate-${name}.html`);
+      const tag = (/** @type {string} */ alt) => file.match(new RegExp(`<img[^>]*alt="${alt}"[^>]*>`))?.[0] ?? '';
+      // Before the shape the scanner and a browser agree: the mark stays.
+      expect(tag('Before'), name).toContain(CARRY_ATTR);
+      // After it nothing is marked.
+      if (name !== 'plaintext') expect(tag('After'), name).not.toContain(CARRY_ATTR);
+    }
+  }, 240_000);
+
   it('keeps an image that a longer string or a <noscript> names, once the script draws the page', async () => {
     put(
       'src/shapes/photo.png',
