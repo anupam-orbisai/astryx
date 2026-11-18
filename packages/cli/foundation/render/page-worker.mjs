@@ -925,6 +925,11 @@ function urlApiLiterals(program, filename) {
       return;
     }
     if (binding.path.isVariableDeclarator() && binding.path.node.id === binding.identifier) {
+      // An array the page changes after it makes it may hold anything.
+      if (binding.path.get('init').isArrayExpression() && changesAfter(binding)) {
+        untraced(at);
+        return;
+      }
       follow(binding.path.get('init'), depth + 1);
       return;
     }
@@ -968,6 +973,29 @@ function urlApiLiterals(program, filename) {
     },
   });
   return nodes;
+}
+
+/** The array methods that change the array they are called on. */
+const ARRAY_CHANGES = new Set(['push', 'unshift', 'splice', 'fill', 'copyWithin', 'reverse', 'sort']);
+
+/**
+ * Whether the page may change the array a binding holds after making it:
+ * a method that changes it, an assignment to an element, or a call it is
+ * handed to.
+ * @param {any} binding
+ */
+function changesAfter(binding) {
+  return binding.referencePaths.some((/** @type {any} */ ref) => {
+    const parent = ref.parentPath;
+    if (parent?.isCallExpression() && parent.node.arguments.includes(ref.node)) return true;
+    if (!parent?.isMemberExpression() || parent.node.object !== ref.node) return false;
+    const use = parent.parentPath;
+    return (
+      (use?.isCallExpression() && use.node.callee === parent.node && ARRAY_CHANGES.has(memberName(parent.node) ?? '')) ||
+      (use?.isAssignmentExpression() && use.node.left === parent.node) ||
+      use?.isUpdateExpression()
+    );
+  });
 }
 
 /**
@@ -1156,7 +1184,11 @@ function pagePlugin(filename, browser = false) {
    */
   const noteLiteral = (p, value, why) => {
     noteRemoteLiteral(value, why);
-    const named = why ? nameOfValue(p) : null;
+    // An element of an array a property holds (`photos: ['…']`) goes by
+    // that property's name.
+    let holder = p;
+    while (holder.parentPath?.isArrayExpression()) holder = holder.parentPath;
+    const named = why ? nameOfValue(holder) : null;
     if (named) {
       keyedLiterals.push({value, key: named.name, text: sourceText(p) ?? value, file: filename, line: p.node.loc?.start.line ?? 0});
     }
@@ -1606,7 +1638,7 @@ const jiti = createJiti(entry, {
  * compiles it: the page's files with its plugins and StyleX, the other with
  * its path aliases. The code stays an ES module with its JSX and types. For
  * the browser (`browser`), the page's files keep their real charts and
- * record nothing. Null for any other file.
+ * record only what they hand to the URL API. Null for any other file.
  * @param {string} source
  * @param {string} filename
  * @param {boolean} [browser]

@@ -344,13 +344,13 @@ export function remoteImages({
       ]);
     },
     /**
-     * Note an address the render keeps as written without asking for it, with
-     * why, so the result lists it among those not fetched.
+     * Note an address the page's script keeps as written, with why, so the
+     * result lists it among those not carried, also when the first paint
+     * carries it.
      * @param {string} url
      * @param {string} reason
      */
     keep(url, reason) {
-      if (results.has(url)) return;
       asked.add(url);
       results.set(url, {reason});
     },

@@ -1098,6 +1098,129 @@ describe('a render with images from the web', () => {
     }
   }, 180_000);
 
+  it('keeps a property array the URL API reads, and treats an array changed after it is made as untraced', async () => {
+    const dir = makeLinkedFixture('astryx-render-url-api-arrays-', [
+      'react',
+      'react-dom',
+    ]);
+    try {
+      const pages = {
+        'property.jsx': [
+          "import {useState} from 'react';",
+          "const product = {name: 'Shoe', photos: ['https://cdn.example.com/g.png']};",
+          'const sized = [];',
+          'for (const src of product.photos) {',
+          '  const url = new URL(src);',
+          "  url.searchParams.set('w', '200');",
+          '  sized.push(url.href);',
+          '}',
+          'export default function Page() {',
+          '  const [open, setOpen] = useState(false);',
+          '  return <main><button onClick={() => setOpen(true)}>Show</button>{open && <img src={sized[0]} alt="" />}</main>;',
+          '}',
+          '',
+        ],
+        'changed.jsx': [
+          "import {useState} from 'react';",
+          'const photos = [];',
+          "photos.push('https://cdn.example.com/g.png');",
+          'const sized = [];',
+          'for (const src of photos) {',
+          '  const url = new URL(src);',
+          "  url.searchParams.set('w', '200');",
+          '  sized.push(url.href);',
+          '}',
+          'export default function Page() {',
+          '  const [open, setOpen] = useState(false);',
+          '  return <main><button onClick={() => setOpen(true)}>Show</button>{open && <img src={sized[0]} alt="" />}</main>;',
+          '}',
+          '',
+        ],
+      };
+      for (const [name, lines] of Object.entries(pages)) {
+        const file = path.join(dir, name);
+        fs.writeFileSync(file, lines.join('\n'));
+        const {fetch, asked} = fetchFrom({
+          'https://cdn.example.com/g.png': png(),
+        });
+        const page = await renderPage(file, {cwd: dir, remoteImages: {fetch}});
+        expect(asked, name).toEqual([]);
+        expect(
+          page.html.slice(page.html.lastIndexOf('<script>')),
+          name,
+        ).toContain('https://cdn.example.com/g.png');
+        const messages = page.warnings
+          .filter(w => w.code === 'remote-asset')
+          .map(w => w.message);
+        expect(
+          messages.some(m =>
+            m.includes(
+              name === 'property.jsx'
+                ? 'changes with the URL API'
+                : 'cannot trace',
+            ),
+          ),
+          name,
+        ).toBe(true);
+        expect(
+          page.remoteImages?.failed.map(f => f.url),
+          name,
+        ).toEqual(['https://cdn.example.com/g.png']);
+      }
+    } finally {
+      removeLinkedFixture(dir);
+    }
+  }, 180_000);
+
+  it('lists a first-paint image the script then draws from the network as not carried, when the URL API gets an untraced address', async () => {
+    const dir = makeLinkedFixture('astryx-render-url-api-first-', [
+      'react',
+      'react-dom',
+    ]);
+    try {
+      const file = path.join(dir, 'page.jsx');
+      fs.writeFileSync(
+        file,
+        [
+          "import {useState} from 'react';",
+          'export default function Page() {',
+          '  const [open, setOpen] = useState(false);',
+          "  const sized = ['https://cdn.example.com/g.png'].map(src => new URL(src).href);",
+          '  return (',
+          '    <main>',
+          '      <img src="https://cdn.example.com/f.png" alt="First" />',
+          '      <button onClick={() => setOpen(true)}>Show</button>',
+          '      {open && <img src={sized[0]} alt="" />}',
+          '    </main>',
+          '  );',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      const {fetch} = fetchFrom({
+        'https://cdn.example.com/f.png': png(),
+        'https://cdn.example.com/g.png': png(),
+      });
+      const page = await renderPage(file, {cwd: dir, remoteImages: {fetch}});
+      expect(page.remoteImages?.fetched).not.toContain(
+        'https://cdn.example.com/f.png',
+      );
+      expect(page.remoteImages?.failed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            url: 'https://cdn.example.com/f.png',
+            reason: expect.stringContaining('cannot trace'),
+          }),
+        ]),
+      );
+      expect(page.html.slice(page.html.lastIndexOf('<script>'))).toContain(
+        'https://cdn.example.com/f.png',
+      );
+    } finally {
+      removeLinkedFixture(dir);
+    }
+  }, 120_000);
+
   it('reads new globalThis.URL as the URL API', async () => {
     const dir = makeLinkedFixture('astryx-render-url-api-global-', [
       'react',

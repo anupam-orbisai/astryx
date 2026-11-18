@@ -1337,7 +1337,15 @@ export async function renderPage(entry, options = {}) {
     );
   }
   if (untraced) {
-    for (const url of [...ctx.rewrites.keys()]) if (/^https:\/\//i.test(url)) ctx.rewrites.delete(url);
+    for (const url of [...ctx.rewrites.keys()]) {
+      if (!/^https:\/\//i.test(url)) continue;
+      ctx.rewrites.delete(url);
+      // A first-paint image: the markup carries it, the script draws it from
+      // the network.
+      if (!/\s/.test(url)) {
+        remote?.keep(url, 'the page hands the URL API an address the render cannot trace, so the script keeps each address as written');
+      }
+    }
   }
   // The script draws the page again with the paths the page wrote, so each
   // image the first paint shows from its carried data keeps showing.
