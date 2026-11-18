@@ -204,7 +204,16 @@ export function* scanHtml(html) {
       if (read === 'open') break;
       token = closing
         ? {kind: 'end', tag: read.tag, start: lt, end: read.end}
-        : {kind: 'start', tag: read.tag, attrs: read.attrs, spans: read.spans, selfClosing: read.selfClosing, start: lt, end: read.end};
+        : {
+            kind: 'start',
+            tag: read.tag,
+            attrs: read.attrs,
+            spans: read.spans,
+            // A browser honours `/>` only in svg or math (and on their roots).
+            selfClosing: read.selfClosing && (foreign.length > 0 || read.tag === 'svg' || read.tag === 'math'),
+            start: lt,
+            end: read.end,
+          };
     }
     if (!token) {
       at = lt + 1;

@@ -1059,13 +1059,17 @@ function inlineAssets(text, kind, ctx) {
   return mapAssetRefs(text, kind, resolveRef, ctx.rewrites, ctx.carried);
 }
 
+/** Elements whose content a browser running scripts builds no image of. */
+const UNBUILT = new Set(['noscript', 'template', 'select']);
+
 /**
  * Where `text` holds markup a browser running scripts never makes elements
  * of, as [start, end] pairs: a comment (a bogus one too), a CDATA section,
- * the text of a raw-text element (`<textarea>`, `<iframe>`, `<xmp>` and the others the
- * scanner names, everything after `<plaintext>`), and each outermost
- * `<noscript>` or `<template>`, which runs to its own close tag past any
- * nested in it. The pieces are the HTML scanner's own.
+ * the text of a raw-text element (`<textarea>`, `<iframe>`, `<xmp>` and the
+ * others the scanner names, everything after `<plaintext>`), and each
+ * outermost `<noscript>`, `<template>` or `<select>` (whose content Firefox's
+ * parser drops), which runs to its own close tag past any nested in it. The
+ * pieces are the HTML scanner's own.
  * @param {string} text
  * @returns {[number, number][]}
  */
@@ -1078,10 +1082,14 @@ function unread(text) {
   let start = 0;
   for (const piece of scanHtml(text)) {
     if (open.length === 0 && (piece.kind === 'comment' || piece.kind === 'cdata' || piece.kind === 'raw')) {
-      ranges.push([piece.start, piece.end]);
+      // A `<![CDATA[` the scanner reads as a bogus comment (outside a foreign
+      // root it tracks) can still be CDATA in a browser: range it to `]]>`.
+      const cdata = piece.kind === 'comment' && text.startsWith('<![CDATA[', piece.start);
+      const close = cdata ? text.indexOf(']]>', piece.start + 9) : -1;
+      ranges.push([piece.start, cdata ? (close < 0 ? text.length : close + 3) : piece.end]);
       continue;
     }
-    if ((piece.kind !== 'start' && piece.kind !== 'end') || (piece.tag !== 'noscript' && piece.tag !== 'template')) continue;
+    if ((piece.kind !== 'start' && piece.kind !== 'end') || !UNBUILT.has(piece.tag)) continue;
     if (piece.kind === 'start') {
       if (piece.selfClosing) continue;
       if (open.length === 0) start = piece.start;

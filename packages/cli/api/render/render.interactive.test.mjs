@@ -469,6 +469,13 @@ const SHAPES = [
   \`<x.y title='\${IMG}'>name</x.y>\`,
   \`<math></svg><![CDATA[ a > \${IMG} ]]></math>\`,
   '<frame src="./photo.png">',
+  \`<select><option>Photo \${IMG}</option></select>\`,
+  \`<textarea/>\${IMG}</textarea>\`,
+  \`<iframe/>\${IMG}</iframe>\`,
+  \`<title/>\${IMG}</title>\`,
+  \`<noscript/>\${IMG}</noscript>\`,
+  \`<template/>\${IMG}</template>\`,
+  \`<svg><foreignObject><div></svg><![CDATA[ a > \${IMG} ]]></div></foreignObject></svg>\`,
 ];
 export default function Page() {
   return (
@@ -559,7 +566,9 @@ export default function Page() {
     expect(quoted.drawn).toMatch(/^data:image\/png;base64,/);
     // Nor inside <iframe>, <xmp>, <noembed> or <noframes> text, past a longer
     // end tag (</textareas>), in a script's escaped text, inside another
-    // attribute's value, or in a bogus comment (<?…>, <!…>, </ …>).
+    // attribute's value, in a bogus comment (<?…>, <!…>, </ …>), inside a
+    // <select>, after a self-closing raw-text or template tag a browser
+    // opens anyway, or in CDATA a browser still reads as such.
     expect(read('raw-elements.html')).not.toContain(CARRY_ATTR);
     const raw = await drawn('raw-elements.html');
     expect(raw.drawn).toMatch(/^data:image\/png;base64,/);

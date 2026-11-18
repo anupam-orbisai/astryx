@@ -363,6 +363,12 @@ describe('scanHtml', () => {
     expect(pieces('<math></svg><![CDATA[ a > <img src="a.png"> ]]></math>')).toEqual(['start:<math>', 'end:</svg>', 'cdata:<![CDATA[ a > <img src="a.png"> ]]>', 'end:</math>']);
   });
 
+  it('honours a self-closing tag only in svg or math', () => {
+    expect(pieces('<textarea/><img src="a.png"></textarea><b>')).toEqual(['start:<textarea/>', 'raw:<img src="a.png">', 'end:</textarea>', 'start:<b>']);
+    const closed = [...scanHtml('<div/><svg><path/></svg>')].filter(t => t.kind === 'start').map(t => /** @type {any} */ (t).selfClosing);
+    expect(closed).toEqual([false, false, true]);
+  });
+
   it('says where each attribute is', () => {
     const html = `<span data-tip='<img src="a.png">' id=b>`;
     const [tag] = /** @type {any[]} */ ([...scanHtml(html)]);
