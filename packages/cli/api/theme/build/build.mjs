@@ -5707,11 +5707,30 @@ async function themeBuildInternal(
     // the rules just generated; a declaration is the theme's when its
     // source, or a local theme it extends, writes it. Warned at its line,
     // with the change that makes it show; the output is the same.
+    // Where a setting is written, nearest first: the theme's own objects in
+    // its file (never a base theme it extends that the file also defines),
+    // then such a base, then each local theme it extends in its own file.
+    // Each key path is read from the root of the object.
+    const ownIndex = keyPathIndex(themeSource, filePath);
     const writtenIn = [
-      {file: filePath, source: themeSource},
-      ...extendedSources,
-    ].map(s => ({file: s.file, lineOf: keyPathIndex(s.source, s.file)}));
-    // The rules of the theme it extends, generated once when first asked.
+      {
+        file: filePath,
+        lineOf: (/** @type {string[]} */ k) =>
+          ownIndex(k, {fromRoot: true}),
+      },
+      {
+        file: filePath,
+        lineOf: (/** @type {string[]} */ k) =>
+          ownIndex(k, {fromRoot: true, bases: true}),
+      },
+      ...extendedSources.map(s => {
+        const index = keyPathIndex(s.source, s.file);
+        return {
+          file: s.file,
+          lineOf: (/** @type {string[]} */ k) => index(k, {fromRoot: true}),
+        };
+      }),
+    ];
     const blocks = blockPaths(
       resolvedTheme.components,
       components =>
@@ -5726,7 +5745,7 @@ async function themeBuildInternal(
         at => {
           for (const [layer, {lineOf}] of writtenIn.entries())
             for (const keys of declarationPaths(at, blocks))
-              if (lineOf(keys, {fromRoot: true}) != null)
+              if (lineOf(keys) != null)
                 return {path: keys, layer};
           return null;
         },
@@ -5741,9 +5760,9 @@ async function themeBuildInternal(
       // At its line in the theme's file, or in the local theme it extends
       // that writes it (a family member's included).
       const writer = writtenIn.find(
-        w => w.lineOf(entry.path, {fromRoot: true}) != null,
+        w => w.lineOf(entry.path) != null,
       );
-      const line = writer?.lineOf(entry.path, {fromRoot: true}) ?? null;
+      const line = writer?.lineOf(entry.path) ?? null;
       const file =
         writer && writer.file !== filePath
           ? path.relative(cwd, writer.file) || writer.file
