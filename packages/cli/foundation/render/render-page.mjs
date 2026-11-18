@@ -23,6 +23,7 @@ import * as path from 'node:path';
 import {fork, spawnSync} from 'node:child_process';
 import {builtinModules} from 'node:module';
 import {fileURLToPath} from 'node:url';
+import {formatSrcset, parseSrcset} from './srcset.mjs';
 import postcss from 'postcss';
 import {
   assetDataUri,
@@ -34,6 +35,7 @@ import {
 import {classesIn, cutCss, layerOrderOf} from './css-cut.mjs';
 import {asParsed, formatFor, sha256, sourceBlock} from './source-block.mjs';
 import {LINK_OUT, ROOT_ID} from './client-bundle.mjs';
+import {remoteImages} from './remote-images.mjs';
 import {ESBUILD_MISSING, findEsbuild} from './esbuild-dependency.mjs';
 import {carriedNameFor, embeddedPathProblem} from './embedded-files.mjs';
 import {scanHtml} from './html-reader.mjs';
@@ -71,6 +73,7 @@ export {MODULE_EXTENSIONS, PAGE_EXTENSIONS} from './embedded-files.mjs';
  * @property {{name: string, dir: string}[]} fromSet - Packages that came from the package set the CLI runs from, not the page's folder.
  * @property {number} [scriptBytes] - Bytes of the page's script; none in a markup-only render.
  * @property {number} [scriptModules] - The modules the page's script holds; none in a markup-only render.
+ * @property {{fetched: string[], failed: {url: string, reason: string}[]}} [remoteImages] - The https images the page names: each address fetched into the file, and each one left as the page wrote it, with why. Present when the page names a remote image and the render writes a file.
  */
 
 /** An error carrying a render error code. */
@@ -737,6 +740,13 @@ export function withCarriedPaths(script, rewrites) {
         )
         .join('');
     }
+    // A CSS url() in a style the script sets (`backgroundImage:
+    // "url(./bg.png)"`) names the same file. A data: URI with no space,
+    // quote or parenthesis needs no quotes in url().
+    if (/[\s()]/.test(now)) continue;
+    for (const form of [`url(${was})`, `url("${was}")`, `url('${was}')`]) {
+      out = out.split(form).join(`url(${now})`);
+    }
   }
   return out;
 }
@@ -805,14 +815,16 @@ export function cssUrlRef(m) {
  * A reference is URL text: it names the file its percent-escapes decode to
  * (`a%20b.png` is "a b.png"), as a browser and the app's bundler read it.
  * A file that cannot be read (no permission) is `unreadable`.
- * @returns {null | {kind: 'remote', ref: string} | {kind: 'missing', ref: string} | {kind: 'not-file' | 'unreadable' | 'file', ref: string, file: string}}
+ * A remote file's `url` is the whole address the page wrote, its query too.
+ * @returns {null | {kind: 'remote', ref: string, url: string} | {kind: 'missing', ref: string} | {kind: 'not-file' | 'unreadable' | 'file', ref: string, file: string}}
  */
 export function assetRef(ref, at) {
   const clean = decodeAttr(ref).trim().split(/[?#]/)[0];
   if (!clean) return null;
   if (/^(data:|blob:|#|about:|mailto:|tel:|javascript:)/i.test(clean))
     return null;
-  if (/^(https?:)?\/\//i.test(clean)) return {kind: 'remote', ref: clean};
+  if (/^(https?:)?\/\//i.test(clean))
+    return {kind: 'remote', ref: clean, url: decodeAttr(ref).trim()};
   /** @type {string} */
   let named;
   try {
@@ -848,11 +860,12 @@ export function assetRef(ref, at) {
  * link (`href`) loads nothing, so it is left alone.
  * @param {string} text markup or CSS
  * @param {'html' | 'css'} kind
- * @param {{dir: string, root: string, warnings: RenderWarning[], counted: Set<string>, localAssets: Set<string>, leaveLargeStyleAssets?: boolean, rewrites?: Map<string, string>}} ctx
+ * @param {{dir: string, root: string, warnings: RenderWarning[], counted: Set<string>, localAssets: Set<string>, leaveLargeStyleAssets?: boolean, rewrites?: Map<string, string>, remote?: Map<string, import('./remote-images.mjs').RemoteImage>}} ctx
  *   `leaveLargeStyleAssets`: a stylesheet's file too large to inline is left
  *   as it is and named, as a missing one is, rather than refused;
  *   `rewrites`: each attribute value the markup's rewrite replaced, as the
- *   page wrote it, with what it became
+ *   page wrote it, with what it became; `remote`: the remote images fetched
+ *   for this render, by the address the page wrote
  */
 function inlineAssets(text, kind, ctx) {
   /** @param {string} ref */
@@ -861,12 +874,16 @@ function inlineAssets(text, kind, ctx) {
     if (!named) return null;
     const clean = named.ref;
     if (named.kind === 'remote') {
-      const key = `remote:${clean}`;
+      const fetched = ctx.remote?.get(named.url);
+      if (fetched && 'uri' in fetched) return fetched.uri;
+      // Keyed by the whole address, as the later-drawn pass keys it, so one
+      // image gets one warning.
+      const key = `remote:${named.url}`;
       if (!ctx.counted.has(key)) {
         ctx.counted.add(key);
         ctx.warnings.push({
           code: 'remote-asset',
-          message: `${clean} is loaded from the network, which a sandboxed page cannot reach; save it beside the page and import it instead.`,
+          message: `${named.url} is loaded from the network, which a sandboxed page cannot reach; save it beside the page and import it instead.${fetched ? ` The render could not fetch it: ${fetched.reason}.` : ''}`,
         });
       }
       return null;
@@ -911,12 +928,29 @@ function inlineAssets(text, kind, ctx) {
     if (!clean.startsWith('/')) ctx.localAssets.add(found);
     return assetDataUri(found);
   };
-  /** @param {string} value */
-  const urls = value =>
+  return mapAssetRefs(text, kind, resolveRef, ctx.rewrites);
+}
+
+/**
+ * Each reference to a file in markup (`src`, `poster`, `srcset`, and `url()`
+ * in a `style` attribute) or in CSS (`url()`), replaced by what `resolve`
+ * gives for it, or kept when it gives null.
+ * @param {string} text markup or CSS
+ * @param {'html' | 'css'} kind
+ * @param {(ref: string) => string | null} resolve
+ * @param {Map<string, string>} [rewrites] gets each attribute value replaced,
+ *   as the page wrote it, with what it became
+ */
+function mapAssetRefs(text, kind, resolve, rewrites) {
+  /**
+   * @param {string} value
+   * @param {boolean} [record] keep each rewrite, for a style the script sets
+   */
+  const urls = (value, record = false) =>
     value.replace(new RegExp(CSS_URL.source, 'g'), (whole, ...rest) => {
-      const uri = resolveRef(
-        cssUrlRef(/** @type {any} */ ({groups: rest.at(-1)})),
-      );
+      const ref = cssUrlRef(/** @type {any} */ ({groups: rest.at(-1)}));
+      const uri = resolve(ref);
+      if (uri && record && ref) rewrites?.set(ref, uri);
       return uri ? `url("${uri}")` : whole;
     });
   if (kind === 'css') return urls(text);
@@ -924,28 +958,72 @@ function inlineAssets(text, kind, ctx) {
     // React writes `srcSet` as it is spelled in JSX; HTML reads attribute
     // names in any case.
     .replace(/\s(src|poster)="([^"]*)"/gi, (whole, attr, ref) => {
-      const uri = resolveRef(ref);
-      if (uri) ctx.rewrites?.set(decodeAttr(ref), uri);
+      const uri = resolve(ref);
+      if (uri) rewrites?.set(decodeAttr(ref), uri);
       return uri ? ` ${attr}="${uri}"` : whole;
     })
     .replace(/\s(srcset)="([^"]*)"/gi, (whole, attr, set) => {
-      const parts = decodeAttr(set)
-        .split(',')
-        .map(part => {
-          const [ref, ...rest] = part.trim().split(/\s+/);
-          const uri = ref ? resolveRef(ref) : null;
-          return [uri ?? ref, ...rest].join(' ');
-        });
-      const rewritten = parts.join(', ');
-      if (rewritten !== decodeAttr(set)) ctx.rewrites?.set(decodeAttr(set), rewritten);
+      const written = decodeAttr(set);
+      let carried = false;
+      const candidates = parseSrcset(written).map(({url, descriptor}) => {
+        const uri = resolve(url);
+        if (uri) carried = true;
+        return {url: uri ?? url, descriptor};
+      });
+      if (!carried) return whole;
+      const rewritten = formatSrcset(candidates);
+      rewrites?.set(written, rewritten);
       return ` ${attr}="${rewritten.replace(/"/g, '&quot;')}"`;
     })
     .replace(/\sstyle="([^"]*)"/g, (whole, style) => {
       // The attribute holds escaped text: rewrite the CSS it means, then
       // escape it again, so a data: URI's quotes cannot end the attribute.
-      const css = urls(decodeAttr(style));
+      const css = urls(decodeAttr(style), true);
       return ` style="${css.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`;
     });
+}
+
+/** A remote file whose address names a type that is never an image. */
+const NOT_AN_IMAGE = /\.(woff2?|ttf|otf|eot|mp4|webm|mov|mp3|wav|ogg|css|[cm]?js|json|html?|pdf|txt|xml)$/i;
+
+/**
+ * The remote addresses markup or CSS names where an image goes, as the page
+ * wrote them: `src` and `srcset` of an image, `srcset` of a picture's
+ * source, `src` of an image button, a video's `poster`, and `url()` in a
+ * `style` attribute or a stylesheet, except an address that names a font,
+ * media or a document.
+ * @param {string} text
+ * @param {'html' | 'css'} kind
+ * @param {{dir: string, root: string}} at
+ * @returns {Set<string>}
+ */
+function remoteRefsIn(text, kind, at) {
+  /** @type {Set<string>} */
+  const found = new Set();
+  /** @param {string} ref */
+  const take = ref => {
+    const named = assetRef(ref, at);
+    if (named?.kind === 'remote' && !NOT_AN_IMAGE.test(named.ref)) found.add(named.url);
+    return null;
+  };
+  if (kind === 'css') {
+    mapAssetRefs(text, 'css', take);
+    return found;
+  }
+  for (const element of text.matchAll(/<([a-zA-Z][\w-]*)\b([^>]*)>/g)) {
+    const tag = element[1].toLowerCase();
+    const attrs = element[2];
+    for (const attr of attrs.matchAll(/\s(src|srcset|poster|style)="([^"]*)"/gi)) {
+      const name = attr[1].toLowerCase();
+      const image =
+        name === 'style' ||
+        (name === 'poster' && tag === 'video') ||
+        (name === 'srcset' && (tag === 'img' || tag === 'source')) ||
+        (name === 'src' && (tag === 'img' || (tag === 'input' && /\stype="image"/i.test(attrs))));
+      if (image) mapAssetRefs(` ${name}="${attr[2]}"`, 'html', take);
+    }
+  }
+  return found;
 }
 
 /**
@@ -980,7 +1058,7 @@ const SCHEME_CSS =
 /**
  * Render a page module to one self-contained HTML file.
  * @param {string} entry absolute path of the page module
- * @param {{title?: string, timeoutMs?: number, version?: string, served?: ServedSet | null, output?: string, cwd?: string, openLayers?: boolean, leaveLargeStyleAssets?: boolean, markupOnly?: boolean, esbuildFrom?: string}} [options]
+ * @param {{title?: string, timeoutMs?: number, version?: string, served?: ServedSet | null, output?: string, cwd?: string, openLayers?: boolean, leaveLargeStyleAssets?: boolean, markupOnly?: boolean, esbuildFrom?: string, remoteImages?: Parameters<typeof remoteImages>[0]}} [options]
  *   `served`: the Core of the package set the CLI runs from, for the packages
  *   the page's folder has no copy of; `output`: the file the HTML goes to;
  *   `cwd`: the current folder, whose files are the page's own outside a
@@ -999,7 +1077,10 @@ const SCHEME_CSS =
  *   dependency of the CLI, builds the script (`esbuildFrom`: the folder it
  *   resolves from); a page whose script cannot be built fails the render.
  *   `markupOnly` renders the markup and its styles without the script, for a
- *   caller that shows the markup itself (the theme editor); it writes no file.
+ *   caller that shows the markup itself (the theme editor); it writes no file
+ *   and reaches no network. The render fetches each https image the page
+ *   names, once, so the file carries it (remote-images.mjs; `remoteImages`:
+ *   the fetch and its time limits, for tests).
  * @returns {Promise<RenderedPage>}
  */
 export async function renderPage(entry, options = {}) {
@@ -1093,6 +1174,9 @@ export async function renderPage(entry, options = {}) {
     });
   }
 
+  // The https images the page names, fetched once so the file carries them.
+  // A markup-only render reaches no network.
+  const remote = options.markupOnly ? null : remoteImages(options.remoteImages);
   const ctx = {
     dir,
     root,
@@ -1101,11 +1185,48 @@ export async function renderPage(entry, options = {}) {
     localAssets: /** @type {Set<string>} */ (new Set()),
     leaveLargeStyleAssets: options.leaveLargeStyleAssets === true,
     rewrites: /** @type {Map<string, string>} */ (new Map()),
+    remote: remote?.results,
+  };
+  /**
+   * Inline what `text` names, after fetching the remote images it names that
+   * no earlier text named.
+   * @param {string} text
+   * @param {'html' | 'css'} kind
+   * @param {typeof ctx} at
+   */
+  const inlineWithRemote = async (text, kind, at) => {
+    if (remote) await remote.get(remoteRefsIn(text, kind, at));
+    return inlineAssets(text, kind, at);
   };
   /** Stylesheets pulled in by another's `@import`. @type {Set<string>} */
   const carriedCss = new Set();
+  // An https image address the page changes with the URL API stays as
+  // written: the API writes a query before the fragment, so no data: URI can
+  // stand in for it. A literal of a property the page reads into the API, in
+  // any file, counts too.
+  const urlProps = new Set(/** @type {string[]} */ (message.urlApiProps ?? []));
+  const keptAsWritten = new Set(/** @type {string[]} */ (message.urlChanged ?? []));
+  /** @type {{text: string, file: string, line: number, how?: 'url'}[]} */
+  const builtList = [...(message.builtRemote ?? [])];
+  for (const keyed of /** @type {{value: string, key: string, text: string, file: string, line: number}[]} */ (message.keyedLiterals ?? [])) {
+    if (!urlProps.has(keyed.key)) continue;
+    keptAsWritten.add(keyed.value);
+    builtList.push({text: keyed.text, file: keyed.file, line: keyed.line, how: 'url'});
+  }
+  // The images the markup, the page's own CSS and its literals name are
+  // asked for together, so a machine with no network waits for one answer
+  // window, not one per text.
+  if (remote) {
+    await remote.get([
+      ...remoteRefsIn(markup, 'html', ctx),
+      ...(message.css ? remoteRefsIn(message.css, 'css', ctx) : []),
+      ...(typeof message.script === 'string'
+        ? /** @type {string[]} */ (message.remoteLiterals ?? []).filter(url => !keptAsWritten.has(url))
+        : []),
+    ]);
+  }
   try {
-    markup = inlineAssets(markup, 'html', ctx);
+    markup = await inlineWithRemote(markup, 'html', ctx);
     // React adds `<link rel="preload">` hints for images it renders; in one
     // static file they only fetch from the network, so they go.
     markup = markup.replace(/<link rel="preload"[^>]*\/?>/g, '');
@@ -1136,8 +1257,73 @@ export async function renderPage(entry, options = {}) {
   const used = classesIn(markup);
   /** The page's script; none in a markup-only render. @type {string | null} */
   const script = typeof message.script === 'string' ? message.script : null;
+  // https images the page's files name as literals that the first paint may
+  // not show (the next view, a feed after a click): fetched the same way, so
+  // the script draws them from the same carried data.
+  if (remote && script !== null) {
+    const literals = /** @type {string[]} */ (message.remoteLiterals ?? []).filter(url => !keptAsWritten.has(url));
+    const namedOnly = new Set(/** @type {string[]} */ (message.remoteNamedOnly ?? []));
+    await remote.get(literals);
+    for (const url of literals) {
+      const fetched = remote.results.get(url);
+      if (!fetched) continue;
+      if ('uri' in fetched) {
+        if (!ctx.rewrites.has(url)) ctx.rewrites.set(url, fetched.uri);
+        continue;
+      }
+      // An address that counts only by an image word in a name around it
+      // (`imageUploadUrl`) can be an API's: when its server answers with
+      // another type (JSON, a page), the result lists it, with no warning.
+      // Any other later-drawn address warns, as in the first paint.
+      if (fetched.answered && namedOnly.has(url)) continue;
+      const key = `remote:${url}`;
+      if (ctx.counted.has(key)) continue;
+      ctx.counted.add(key);
+      warnings.push({
+        code: 'remote-asset',
+        message: `${url}, which the page's code names as an image, is loaded from the network when the script draws it, which a sandboxed page cannot reach; save it beside the page and import it instead. The render could not fetch it: ${fetched.reason}.`,
+      });
+    }
+    // A `srcSet` value the script sets becomes the same list with each
+    // fetched candidate's data in place of its address.
+    for (const value of /** @type {string[]} */ (message.remoteSrcsets ?? [])) {
+      let carried = false;
+      const candidates = parseSrcset(value).map(({url, descriptor}) => {
+        const fetched = remote.results.get(url);
+        if (fetched && 'uri' in fetched) {
+          carried = true;
+          return {url: fetched.uri, descriptor};
+        }
+        return {url, descriptor};
+      });
+      if (carried && !ctx.rewrites.has(value)) ctx.rewrites.set(value, formatSrcset(candidates));
+    }
+  }
+  /** Built addresses named in a warning already. @type {Set<string>} */
+  const builtNamed = new Set();
+  for (const built of builtList) {
+    const where = `${path.relative(dir, built.file).split(path.sep).join('/')}:${built.line}`;
+    if (builtNamed.has(`${where} ${built.text}`)) continue;
+    builtNamed.add(`${where} ${built.text}`);
+    warnings.push({
+      code: 'remote-asset',
+      message:
+        built.how === 'url'
+          ? `${built.text} (${where}) is an image address the page changes with the URL API, so the render cannot carry it: the file asks the network for it when the script draws it. Save the image beside the page and import it.`
+          : `${built.text} (${where}) builds an image address in code, so the render cannot carry it: the file asks the network for it when the script draws it. Write the address whole, or save the image beside the page and import it.`,
+    });
+  }
+  // The script keeps such an address as written, also where the first paint
+  // carries it.
+  for (const url of keptAsWritten) ctx.rewrites.delete(url);
   // The script draws the page again with the paths the page wrote, so each
   // image the first paint shows from its carried data keeps showing.
+  // In the script, a carried https address becomes its data: URI with an
+  // empty fragment, which a data: URL ignores: code that extends the address
+  // (`${hero}?w=640`) then adds to the fragment, and still draws the image.
+  for (const [was, now] of ctx.rewrites) {
+    if (/^https:\/\/\S+$/i.test(was) && now.startsWith('data:') && !now.includes('#')) ctx.rewrites.set(was, `${now}#`);
+  }
   const drawn = script === null ? null : withCarriedPaths(script, ctx.rewrites);
   // The script draws what the markup does not show yet (a menu as it opens,
   // the next tab), so the rules every class name it holds needs stay too.
@@ -1154,7 +1340,7 @@ export async function renderPage(entry, options = {}) {
     /** @type {string[]} */
     const packageSheets = [];
     /** A stylesheet's rules cut to the page, with its own imports inlined. @param {string} file @param {string} text */
-    const sheet = (file, text) => {
+    const sheet = async (file, text) => {
       try {
         const own = expandImports(file, text, {
           warnings,
@@ -1163,7 +1349,7 @@ export async function renderPage(entry, options = {}) {
           packageSheets,
           served,
         });
-        return inlineAssets(cutCss(own, kept, {states}), 'css', {
+        return await inlineWithRemote(cutCss(own, kept, {states}), 'css', {
           ...ctx,
           dir: path.dirname(file),
         });
@@ -1178,20 +1364,21 @@ export async function renderPage(entry, options = {}) {
         );
       }
     };
-    sheetText.forEach((text, i) => {
-      css += sheet(sheetFiles[i], text);
-    });
+    for (const [i, text] of sheetText.entries()) {
+      css += await sheet(sheetFiles[i], text);
+    }
     for (const {
       file,
       css: text,
     } of /** @type {{file: string, css: string}[]} */ (
       message.importedCss ?? []
     )) {
-      css += sheet(file, text);
+      css += await sheet(file, text);
     }
     for (const spec of packageSheets)
       if (!sheets.includes(spec)) sheets.push(spec);
-    if (message.css) css += inlineAssets(message.css, 'css', ctx);
+    if (message.css) css += await inlineWithRemote(message.css, 'css', ctx);
+    remote?.done();
   } catch (e) {
     const err = /** @type {any} */ (e);
     if (err instanceof RenderAssetError)
@@ -1614,5 +1801,6 @@ export async function renderPage(entry, options = {}) {
     ...(leftOut.length > 0 ? {notCarried: leftOut} : {}),
     fromSet: message.fromSet ?? [],
     ...(pageScript ? {scriptBytes: Buffer.byteLength(pageScript), scriptModules: message.scriptModules ?? 0} : {}),
+    ...(remote && remote.results.size > 0 ? {remoteImages: remote.summary()} : {}),
   };
 }
