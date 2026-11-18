@@ -29,6 +29,14 @@ import {doc as renderFn} from '../../../../api/render/render.doc.mjs';
 /** @param {number} n */
 const kb = n => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
 
+/**
+ * A written file's path and size, and where it is when that path is relative.
+ * @param {string} output
+ * @param {number} bytes
+ */
+const shownAt = (output, bytes) =>
+  path.isAbsolute(output) ? `${output} (${kb(bytes)})` : `${output} (${kb(bytes)}), at ${path.resolve(output)}`;
+
 /** The text answer names this many files at most. The JSON answer keeps every file. */
 const LISTED_FILES = 10;
 
@@ -128,6 +136,20 @@ export function registerExperimentalExport(group, program) {
           ...(d.warnings.length > 0
             ? [section('Warnings'), list(d.warnings.map(w => w.message))]
             : []),
+          section('Checks'),
+          ...(d.checks.outside.length === 0
+            ? [text("The file's markup and stylesheets load nothing from outside the file.")]
+            : [record({outside: fileList(d.checks.outside)})]),
+          record({
+            exact: d.checks.roundTrip.exact
+              ? `yes: --reverse gives back all ${d.checks.roundTrip.files} carried files byte for byte`
+              : `no: ${d.checks.roundTrip.differs.join(', ')} differ${d.checks.roundTrip.differs.length === 1 ? 's' : ''} from the files on disk`,
+          }),
+          text(
+            d.checks.outside.length === 0
+              ? `Share this one file: ${shownAt(d.output, d.bytes)}. Nothing else needs to go with it.`
+              : `${shownAt(d.output, d.bytes)} loads ${fileList(d.checks.outside)} from outside the file when it opens, so it does not stand alone.`,
+          ),
           text(`Give it back: ${run} experimental export --reverse ${shellArg(d.output)}${restoreHere(d)}`),
         );
         return answered;

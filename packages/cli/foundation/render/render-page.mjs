@@ -185,7 +185,7 @@ const decodeAttr = s =>
  * @param {string} params
  * @returns {{url: string, layer: string | null, supports: string | null, media: string} | null}
  */
-function importParams(params) {
+export function importParams(params) {
   const m =
     /^\s*(?:url\(\s*(['"]?)([\s\S]*?)\1\s*\)|(['"])([\s\S]*?)\3)\s*([\s\S]*)$/.exec(
       params,
@@ -793,6 +793,31 @@ export function cssUrlRef(m) {
   return m.groups?.dq ?? m.groups?.sq ?? m.groups?.bare ?? '';
 }
 
+/** The rel values of a `<link>` the browser fetches its href for. */
+const FETCHING_RELS = new Set([
+  'stylesheet',
+  'icon',
+  'apple-touch-icon',
+  'mask-icon',
+  'manifest',
+  'preload',
+  'modulepreload',
+  'prefetch',
+]);
+
+/**
+ * A reference that loads nothing when the file opens: inline data, a
+ * fragment, or a scheme that names no file (about:, mailto:, tel:,
+ * javascript:).
+ */
+const NOT_A_LOAD = /^(data:|blob:|#|about:|mailto:|tel:|javascript:)/i;
+
+/**
+ * Whether a reference, as written, makes the browser load something.
+ * @param {string} ref
+ */
+export const isLoad = ref => ref.trim() !== '' && !NOT_A_LOAD.test(ref.trim());
+
 /**
  * What a local file reference of a page or stylesheet names: nothing to
  * inline (inline data, a fragment, a non-asset path), a remote file, a file
@@ -810,8 +835,7 @@ export function cssUrlRef(m) {
 export function assetRef(ref, at) {
   const clean = decodeAttr(ref).trim().split(/[?#]/)[0];
   if (!clean) return null;
-  if (/^(data:|blob:|#|about:|mailto:|tel:|javascript:)/i.test(clean))
-    return null;
+  if (NOT_A_LOAD.test(clean)) return null;
   if (/^(https?:)?\/\//i.test(clean)) return {kind: 'remote', ref: clean};
   /** @type {string} */
   let named;
@@ -911,10 +935,27 @@ function inlineAssets(text, kind, ctx) {
     if (!clean.startsWith('/')) ctx.localAssets.add(found);
     return assetDataUri(found);
   };
+  return rewriteRefs(text, kind, resolveRef, ctx.rewrites);
+}
+
+/**
+ * Each reference a page's markup or stylesheet loads, read once for every
+ * caller: the render inlines them, and the checks on a written file name the
+ * remote ones. In markup: src, poster and srcset attributes, and url() in
+ * style attributes; in a stylesheet: url(). `resolve` gets each reference as
+ * written and returns what replaces it, or null to keep it.
+ * @param {string} text
+ * @param {'html' | 'css'} kind
+ * @param {(ref: string) => string | null} resolve
+ * @param {Map<string, string>} [rewrites] each changed attribute value: its
+ *   text before and after
+ * @returns {string} the text with the replacements made
+ */
+export function rewriteRefs(text, kind, resolve, rewrites) {
   /** @param {string} value */
   const urls = value =>
     value.replace(new RegExp(CSS_URL.source, 'g'), (whole, ...rest) => {
-      const uri = resolveRef(
+      const uri = resolve(
         cssUrlRef(/** @type {any} */ ({groups: rest.at(-1)})),
       );
       return uri ? `url("${uri}")` : whole;
@@ -924,8 +965,8 @@ function inlineAssets(text, kind, ctx) {
     // React writes `srcSet` as it is spelled in JSX; HTML reads attribute
     // names in any case.
     .replace(/\s(src|poster)="([^"]*)"/gi, (whole, attr, ref) => {
-      const uri = resolveRef(ref);
-      if (uri) ctx.rewrites?.set(decodeAttr(ref), uri);
+      const uri = resolve(ref);
+      if (uri) rewrites?.set(decodeAttr(ref), uri);
       return uri ? ` ${attr}="${uri}"` : whole;
     })
     .replace(/\s(srcset)="([^"]*)"/gi, (whole, attr, set) => {
@@ -933,11 +974,11 @@ function inlineAssets(text, kind, ctx) {
         .split(',')
         .map(part => {
           const [ref, ...rest] = part.trim().split(/\s+/);
-          const uri = ref ? resolveRef(ref) : null;
+          const uri = ref ? resolve(ref) : null;
           return [uri ?? ref, ...rest].join(' ');
         });
       const rewritten = parts.join(', ');
-      if (rewritten !== decodeAttr(set)) ctx.rewrites?.set(decodeAttr(set), rewritten);
+      if (rewritten !== decodeAttr(set)) rewrites?.set(decodeAttr(set), rewritten);
       return ` ${attr}="${rewritten.replace(/"/g, '&quot;')}"`;
     })
     .replace(/\sstyle="([^"]*)"/g, (whole, style) => {
@@ -946,6 +987,71 @@ function inlineAssets(text, kind, ctx) {
       const css = urls(decodeAttr(style));
       return ` style="${css.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`;
     });
+}
+
+/**
+ * What a page's markup loads that the render does not carry, each once
+ * (a reference that loads nothing, NOT_A_LOAD, aside): the href of a link
+ * with a rel the browser fetches (FETCHING_RELS), the src or data of
+ * iframe, object and embed elements, the href or xlink:href of SVG image,
+ * use and feImage elements,
+ * the url(), CSS import rules and image-set() strings of style elements, and
+ * the image-set() strings of style attributes. The render warns about each,
+ * and the checks on a written file name every one of them.
+ * @param {string} markup
+ * @returns {Array<{tag: string, ref: string}>}
+ */
+export function embeddedLoads(markup) {
+  /** @type {Array<{tag: string, ref: string}>} */
+  const loads = [];
+  /** @type {Set<string>} */
+  const seen = new Set();
+  /** @param {string} tag @param {string} ref */
+  const add = (tag, ref) => {
+    const key = `${tag} ${ref}`;
+    if (!ref || NOT_A_LOAD.test(ref.trim()) || seen.has(key)) return;
+    seen.add(key);
+    loads.push({tag, ref});
+  };
+  /** The strings an image-set() names, which url() does not cover. @param {string} tag @param {string} css */
+  const imageSets = (tag, css) => {
+    for (const [, inner] of css.matchAll(/(?:-webkit-)?image-set\(([^()]*(?:\([^()]*\)[^()]*)*)\)/gi)) {
+      for (const m of inner.matchAll(/(?<![\w(])(["'])([^"']*)\1/g)) add(tag, m[2]);
+    }
+  };
+  /** @param {string} css */
+  const styleSheet = css => {
+    for (const m of css.matchAll(/@import\s+([^;]+);?/gi)) add('style', importParams(m[1])?.url ?? '');
+    for (const m of css.matchAll(new RegExp(CSS_URL.source, 'g'))) add('style', cssUrlRef(m));
+    imageSets('style', css);
+  };
+  let inStyle = false;
+  // Tags and attributes are read as a browser reads them (scanHtml): an
+  // attribute's place in the tag does not matter.
+  for (const token of scanHtml(markup)) {
+    if (token.kind === 'raw') {
+      if (inStyle) styleSheet(markup.slice(token.start, token.end));
+      continue;
+    }
+    if (token.kind !== 'start') continue;
+    inStyle = token.tag === 'style';
+    const attrs = new Map(token.attrs.map(([name, value]) => [name, decodeAttr(value)]));
+    const style = attrs.get('style');
+    if (style) imageSets(token.tag, style);
+    if (token.tag === 'link') {
+      // A link loads only for a rel the browser fetches; a canonical or
+      // author link names a page and loads nothing.
+      const rels = (attrs.get('rel') ?? '').toLowerCase().split(/\s+/);
+      if (rels.some(r => FETCHING_RELS.has(r))) add('link', attrs.get('href') ?? '');
+    } else if (token.tag === 'iframe' || token.tag === 'embed') {
+      add(token.tag, attrs.get('src') ?? '');
+    } else if (token.tag === 'object') {
+      add(token.tag, attrs.get('data') ?? '');
+    } else if (token.tag === 'image' || token.tag === 'use' || token.tag === 'feimage') {
+      add(token.tag, attrs.get('href') ?? attrs.get('xlink:href') ?? '');
+    }
+  }
+  return loads;
 }
 
 /**
@@ -1118,13 +1224,10 @@ export async function renderPage(entry, options = {}) {
           'The page renders a <script> element. A sandboxed viewer blocks it, and anywhere else it runs when the file is opened; remove it from the page.',
       });
     }
-    for (const m of markup.matchAll(
-      /<(link|iframe|object|embed)\b[^>]*?\s(?:href|src|data)="([^"]*)"/gi,
-    )) {
-      if (/^(data:|#)/i.test(m[2])) continue;
+    for (const {tag, ref} of embeddedLoads(markup)) {
       warnings.push({
         code: 'remote-asset',
-        message: `The page renders a <${m[1].toLowerCase()}> that loads ${m[2]}, which a sandboxed page cannot reach and which loads from the network anywhere else; remove it from the page.`,
+        message: `The page renders a <${tag}> that loads ${ref}, which a sandboxed page cannot reach and which loads from the network anywhere else; remove it from the page.`,
       });
     }
   } catch (e) {
