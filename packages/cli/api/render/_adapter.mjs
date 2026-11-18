@@ -580,6 +580,8 @@ export async function renderToFile({cwd, input, output, title, absolute = false}
     stylesheets: page.stylesheets,
     classes: page.classes,
     cssBytes: page.cssBytes,
+    markupBytes: page.markupBytes,
+    sourceBytes: page.sourceBytes,
     images: page.images,
     warnings: page.warnings,
     ...(page.notCarried ? {notCarried: page.notCarried} : {}),
