@@ -76,42 +76,83 @@ document.addEventListener('click', event => {
 // on the document or the window, even one it adds later: a capture listener
 // on the window, which runs first, adds a one-time listener for this click
 // that runs last, so a page that handles the link itself cancels the move.
-const moveToPlace = event => {
-  if (event.defaultPrevented || !(event.target instanceof Element)) return;
-  const link = event.target.closest('a[href]');
-  if (!link) return;
+// Whether a click on this link is one the file moves itself: a link to a
+// place in the page, in a frame whose address is not the document's own.
+const movesInFile = (event, link) => {
   const href = link.getAttribute('href').trim();
-  if (
-    !href.startsWith('#') ||
-    link.hasAttribute('target') ||
-    link.hasAttribute('download') ||
-    event.button !== 0 ||
-    event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
-    document.baseURI.split('#')[0] === location.href.split('#')[0]
-  ) return;
-  // The browser moves to the place against the frame's own address, so it
-  // scrolls, sets :target, fires hashchange and moves focus as in a tab. The
-  // same place again is a navigation to the same address with its fragment,
-  // which a browser also treats as a move to the place; without a fragment
-  // (\`#\` on a frame with none) it would load the file again.
-  event.preventDefault();
-  const hash = new URL(href, location.href).hash;
-  if (hash !== location.hash) location.hash = hash;
-  else location.replace(location.href.split('#')[0] + '#' + hash.slice(1));
+  return (
+    href.startsWith('#') &&
+    !link.hasAttribute('target') &&
+    !link.hasAttribute('download') &&
+    event.button === 0 &&
+    !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) &&
+    document.baseURI.split('#')[0] !== location.href.split('#')[0]
+  );
 };
+// The browser moves to the place against the frame's own address, so it
+// scrolls, sets :target, fires hashchange, moves focus and adds a history
+// entry as in a tab. The same address again is replaced, which a browser also
+// treats as a move to the place, never a load of the file again.
+const moveTo = link => {
+  const place = new URL(link.getAttribute('href').trim(), location.href).href;
+  if (place !== location.href) location.href = place;
+  else location.replace(place);
+};
+// The move is decided after every click listener the page has, even one it
+// adds later: a capture listener on the window, which runs first, waits for
+// this click to reach the window. A page that stops the click on its way
+// (a card's handler that calls stopPropagation) decides it at that point: the
+// file holds the browser's own move, and once that handler has returned it
+// moves unless the page cancelled the click.
 window.addEventListener('click', event => {
   const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
-  if (link && link.getAttribute('href').trim().startsWith('#')) {
-    const last = later => {
-      // A click the page dispatches while this one is still on its way (a
-      // handler that clicks another element first) leaves it waiting; one
-      // after it finished means a handler stopped it before the window.
-      if (later !== event && event.eventPhase !== Event.NONE) return;
-      window.removeEventListener('click', last);
-      if (later === event) moveToPlace(event);
+  if (!link || !movesInFile(event, link)) return;
+  const cancel = Event.prototype.preventDefault;
+  let cancelled = false;
+  let held = false;
+  let decided = false;
+  const decide = () => {
+    if (decided) return;
+    decided = true;
+    window.removeEventListener('click', last);
+    if (cancelled || (event.defaultPrevented && !held)) return;
+    cancel.call(event);
+    moveTo(link);
+  };
+  event.preventDefault = function () {
+    cancelled = true;
+    return cancel.call(this);
+  };
+  for (const name of ['stopPropagation', 'stopImmediatePropagation']) {
+    const stop = Event.prototype[name];
+    event[name] = function () {
+      stop.call(this);
+      if (decided || held) return;
+      held = true;
+      cancel.call(this);
+      queueMicrotask(decide);
     };
-    window.addEventListener('click', last);
   }
+  // The old way to stop a click, \`cancelBubble = true\`, stops it the same way.
+  const bubble = Object.getOwnPropertyDescriptor(Event.prototype, 'cancelBubble');
+  Object.defineProperty(event, 'cancelBubble', {
+    get() {
+      return bubble.get.call(this);
+    },
+    set(value) {
+      if (value) this.stopPropagation();
+    },
+  });
+  const last = later => {
+    // A click the page dispatches while this one is still on its way (a
+    // handler that clicks another element first) leaves it waiting.
+    if (later === event) decide();
+    else if (event.eventPhase === Event.NONE && !decided) {
+      decided = true;
+      window.removeEventListener('click', last);
+    }
+  };
+  window.addEventListener('click', last);
 }, true);
 document.addEventListener('keydown', event => {
   const field = event.target;

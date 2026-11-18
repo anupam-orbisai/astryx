@@ -236,6 +236,9 @@ export default function Page() {
       <span id="100%" />
       <button id="opener" onClick={() => setHash('opened')}>Opener</button>
       <a href="#big">Big only</a>
+      <div onClick={() => setHash('card')}>
+        <a href="#big" onClick={e => e.stopPropagation()}>Stopped</a>
+      </div>
       <a href="#café" onClick={() => document.getElementById('opener')?.click()}>Open then go</a>
       <a href="#café">Café</a>
       <a href="#100%">Hundred</a>
@@ -278,10 +281,19 @@ export default function Page() {
     // A first click on "#", while the address has no fragment yet, is a move
     // to the top inside the same document, never a load of the file again.
     /** @type {any} */ (dom.window).stillHere = true;
+    const entries = dom.window.history.length;
     expect(click('All').defaultPrevented).toBe(true);
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.href).toBe('about:srcdoc#');
     expect(/** @type {any} */ (dom.window).stillHere).toBe(true);
+    // A new place adds a history entry, as in a tab, so Back stays in the file.
+    expect(dom.window.history.length).toBe(entries + 1);
+    // A link whose handler stops the click on its way still moves inside the
+    // file, and the card around it never hears the click.
+    expect(click('Stopped').defaultPrevented).toBe(true);
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.href).toBe('about:srcdoc#big');
+    expect(doc.getElementById('hash')?.textContent).toBe('#big');
     expect(click('Big only').defaultPrevented).toBe(true);
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.href).toBe('about:srcdoc#big');
