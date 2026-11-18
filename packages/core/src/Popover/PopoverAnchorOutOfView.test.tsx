@@ -223,6 +223,37 @@ describe('usePopover focus as the surface hides with its anchor (AR1)', () => {
   });
 });
 
+describe('usePopover focus with no anchor or trigger to take it (AR1)', () => {
+  function Bare() {
+    const anchorRef = useRef<HTMLDivElement>(null);
+    const popover = usePopover({
+      anchor: anchorRef,
+      anchorOutOfViewBehavior: 'hideWhileOutOfView',
+      dialogLabel: 'Row editor',
+      hasLightDismiss: false,
+      hasAutoFocus: false,
+    });
+    const {show} = popover;
+    useEffect(() => {
+      show();
+    }, [show]);
+    return (
+      <main>
+        <div ref={anchorRef}>Row</div>
+        {popover.render(<button type="button">Inside</button>)}
+      </main>
+    );
+  }
+
+  it('moves focus along the focus-return chain, here to the main landmark', () => {
+    render(<Bare />);
+    const inside = screen.getByRole('button', {name: 'Inside', hidden: true});
+    act(() => inside.focus());
+    report(false);
+    expect(document.activeElement).toBe(screen.getByRole('main'));
+  });
+});
+
 // Stable, so the popover binds it once and only the observer sees the removal.
 const findRemovableRow = () => document.querySelector('[data-removable]');
 

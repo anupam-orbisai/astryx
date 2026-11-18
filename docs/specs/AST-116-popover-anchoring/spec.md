@@ -292,12 +292,11 @@ Dialog and DropdownMenu.
   anchor. Released default preserved notes the FR22 changes.
 - `component:Dialog` FR4 and AR2 and `component:DropdownMenu` FR6 point to
   FR17–FR20 for the return target and its fallbacks. Dialog's AV4 and its
-  "modal close" state follow FR20 when the invoker is gone, its FR4 fallback
-  clause and its FR17 condition carry an `FR4 gap:` line (FR17, FR19 and FR20), and its
-  Released default and Migration decision lines note the FR22 change.
+  "modal close" state follow FR20 when the invoker is gone, FR4 and AR2 gain
+  FR17's condition, and its Released default and Migration decision lines note
+  the FR22 change.
 - `component:DropdownMenu`: its Released default line notes the FR22 change,
-  FR6 gains FR17's condition, and its condition, inheritance and fallback
-  clauses carry an `FR6 gap:` line (FR17, FR19 and FR20 gaps).
+  and FR6 gains FR17's condition, the inheritance and the fallback.
 - `component:BottomSheet` keeps its own `finalFocusRef` rule (FR11); FR17–FR21
   do not cover a BottomSheet used directly.
 - `architecture:layer-runtime`: the anchor-visibility observation also drives
@@ -329,13 +328,10 @@ FR12 gap: focus containment is active whenever the popover is open, whatever
 FR15 gap: Escape on a non-modal popover closes it through native auto light
 dismiss or the shared dismissal stack, wherever focus is.
 FR16 gap: every sheet is the modal sheet; `isModal` does not apply there.
-FR17 gap: a Dialog takes focus back to its invoker even when a caller moved it
-outside, and a DropdownMenu focuses its trigger at close whenever focus is on
-the body, even when focus never entered the menu.
-FR19 gap: a Dialog opened from a menu row returns focus to the row, which the
-closed menu removed, so focus falls to the body.
-FR20 gap: a Popover whose opener was removed while it was open leaves focus on
-the body.
+FR20 gap: the chain also tries a component's own stand-in for its opener (a
+typeahead's input) after the element whose `aria-controls` names the layer.
+FR21 gap: a layer removed with its page or view gives no warning when no
+candidate qualifies.
 
 ## Verification
 
@@ -347,9 +343,9 @@ the body.
 | FR7, FR8   | `PopoverAnchorOutOfView.test.tsx`; real-browser evidence gap                         | Anchor clipped by a panel, by the viewport, removed; `stay` and `hideWhileOutOfView`                                   | A dismissal on hide, a hidden surface that takes pointer input, or a layout read in a scroll frame fails                                                     |
 | FR9–FR11   | `PopoverOutsidePress.test.tsx` and `outsidePress.test.ts`; real-browser evidence gap | Veto and no veto; press on the anchor and on the trigger; a touch pan; `hasLightDismiss: false`; Escape                | A vetoed press that closes, a reported pan, a native event on the callback, or a callback for a non-outside close fails                                      |
 | FR12–FR16  | `useFocusTrap.test.tsx`, `Popover.test.tsx` and a real-browser spec                  | Modal and non-modal; Tab at each edge and from the anchor; Tab from outside; role `none`; Escape in and out; the sheet | A non-modal popover that holds Tab, a modal one that leaks it (FR14's role-neutral popups excepted), `aria-modal` on a non-modal one, or a modal sheet fails |
-| FR17, FR18 | `focusReturn.test.ts` and the Popover, Dialog and DropdownMenu suites                | Focus inside at close; on the body; moved outside before close; moved by the hide notification                         | Focus moved from outside the layer, or left on the body, fails                                                                                               |
+| FR17, FR18 | `layerFocusReturn.test.tsx` and the Popover, Dialog and DropdownMenu suites          | Focus inside at close; on the body; moved outside before close; moved by the hide notification                         | Focus moved from outside the layer, or left on the body, fails                                                                                               |
 | FR19       | Menu-to-Dialog suite in jsdom and real Chromium                                      | A menu row opens a Dialog; the Dialog closes; nested popovers                                                          | Focus on the body or on the removed row fails                                                                                                                |
-| FR20, FR21 | `focusReturn.test.ts` and a real-browser spec                                        | Each candidate missing in turn: a tour opened by code, a remounted filter button, a removed opener, no candidate left  | A candidate skipped out of order, a hidden or closing candidate chosen, focus on the body, or no warning fails                                               |
+| FR20, FR21 | `layerFocusReturn.test.tsx` and `focusReturn.test.ts`; real-browser evidence gap     | Each candidate missing in turn: a tour opened by code, a remounted filter button, a removed opener, no candidate left  | A candidate skipped out of order, a hidden or closing candidate chosen, focus on the body, or no warning fails                                               |
 | FR22       | Existing Popover, Dialog, DropdownMenu and Popover-family suites                     | Every released state except FR22's three named changes                                                                 | Any other changed expectation in an existing suite fails                                                                                                     |
 | AR1        | `PopoverAnchorOutOfView.test.tsx`; real-browser evidence gap                         | Focus inside a surface whose anchor scrolls out, with a focusable anchor, a trigger only, neither                      | Focus left in a hidden surface, or moved back when it shows, fails                                                                                           |
 | AR2–AR4    | `Popover.test.tsx` accessibility suite                                               | A trigger-less popover with a separate anchor; a fallback without a tab stop; a popover opened by code                 | An ARIA attribute on the anchor, a tab stop left behind, or an unannounced code-opened popover fails                                                         |

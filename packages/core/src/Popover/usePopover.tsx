@@ -33,8 +33,7 @@ import {resolvePopoverAnchor, type PopoverAnchor} from './popoverAnchor';
 import {useFocusTrapInternal} from '../hooks/useFocusTrap';
 import {useCommittedRef, useCommittedRefInto} from '../hooks/useCommittedRef';
 import {useOutsidePress} from '../Layer/outsidePress';
-import {isElement} from '../utils/nodeType';
-import {isHTMLElement} from '../utils/nodeType';
+import {isElement, isHTMLElement} from '../utils/nodeType';
 import {LayerDepthProvider} from '../Layer/LayerDepthContext';
 import type {StyleXStyles} from '@stylexjs/stylex';
 import {
@@ -200,7 +199,7 @@ export interface UsePopoverOptions {
    * - `'hideWhileOutOfView'`: the popover is hidden and takes no pointer
    *   input. It stays open (no `onHide`) and shows again in place when the
    *   anchor returns. Focus inside it moves to the anchor when the anchor
-   *   takes focus, else to the trigger.
+   *   takes focus, else to the trigger, else along the focus-return chain.
    *
    * @default 'stay'
    */
@@ -227,8 +226,8 @@ export interface UsePopoverOptions {
   onShow?: () => void;
 
   /**
-   * Callback fired when popover is hidden.
-   * Use this to return focus to the trigger element.
+   * Callback fired when popover is hidden. Focus returns on its own as the
+   * popover closes; focus another element here to send focus there instead.
    * Wrap in useCallback for stable identity.
    */
   onHide?: () => void;
@@ -578,6 +577,9 @@ function usePopoverImplementation(
 
   // Track the trigger element for returning focus
   const triggerElementRef = useRef<HTMLElement | null>(null);
+  // The caller's `anchor`, and the element it is bound to now.
+  const anchorOptionRef = useCommittedRef(anchor);
+  const boundAnchorRef = useRef<Element | null>(null);
 
   // Track whether to skip auto-focus for the current open event
   const skipAutoFocusRef = useRef(false);
@@ -623,12 +625,23 @@ function usePopoverImplementation(
   const wantsOutsidePress = hasLightDismiss && onOutsidePress != null;
   const [watchesOutsidePress, setWatchesOutsidePress] =
     useState(wantsOutsidePress);
+  // Focus returns as the popover starts to close, while it still holds focus:
+  // the browser restores focus only for an auto popover whose opener is still
+  // there, and then with a focus ring whatever the last input was. The trap
+  // below supplies the return; it is read through a ref because the layer
+  // exists first.
+  const returnFocusRef = useRef<() => void>(() => {});
+  const onCloseStartRef = useCommittedRef(onCloseStart);
+  const handleCloseStart = useCallback(() => {
+    returnFocusRef.current();
+    onCloseStartRef.current?.();
+  }, [onCloseStartRef]);
   const layer = useLayerInternal({
     mode: 'context',
     lightDismiss: hasLightDismiss && !watchesOutsidePress,
     onShow: handleLayerShow,
     onHide: handleLayerHide,
-    onCloseStart,
+    onCloseStart: handleCloseStart,
     watchesOutsidePans:
       hasLightDismiss && !ownsOutsidePan ? watchOutsidePans : undefined,
     writesEntranceSide,
@@ -647,14 +660,23 @@ function usePopoverImplementation(
   const getOpenerRef = useRef(getOpener);
   getOpenerRef.current = getOpener;
   const getRestoreTarget = useCallback(() => openerRef.current, []);
-  const {containerRef: contentRef, focusFirst} =
-    useFocusTrapInternal<HTMLDivElement>({
-      isActive: layer.isOpen,
-      onEscape: hasEscapeDismiss || hasLightDismiss ? layer.hide : undefined,
-      getRestoreTarget,
-      getRestoreFallback,
-      restoreFocusTo,
-    });
+  const {
+    containerRef: contentRef,
+    focusFirst,
+    returnFocus,
+    moveFocusOut,
+  } = useFocusTrapInternal<HTMLDivElement>({
+    isActive: layer.isOpen,
+    onEscape: hasEscapeDismiss || hasLightDismiss ? layer.hide : undefined,
+    getRestoreTarget,
+    getRestoreFallback,
+    restoreFocusTo,
+    getTrigger: () => triggerElementRef.current,
+    getAnchor: () =>
+      anchorOptionRef.current == null ? null : boundAnchorRef.current,
+    layerId: layer.id,
+  });
+  useCommittedRefInto(returnFocusRef, returnFocus);
 
   const focusInitialTarget = useCallback(() => {
     const container = contentRef.current;
@@ -711,9 +733,7 @@ function usePopoverImplementation(
   const layerRef = layer.ref;
   // With a separate `anchor`, the trigger keeps its role but is not the
   // layer's anchor: the element `anchor` resolves to is.
-  const anchorOptionRef = useCommittedRef(anchor);
   const hasSeparateAnchor = anchor != null;
-  const boundAnchorRef = useRef<Element | null>(null);
   const isAnchorBoundRef = useRef(false);
   const [isAnchorMissing, setIsAnchorMissing] = useState(false);
   const triggerRef = useCallback(
@@ -725,28 +745,23 @@ function usePopoverImplementation(
     },
     [anchorOptionRef, layerRef],
   );
-  // Focus leaves a surface that hides with its anchor: to the anchor when it
-  // takes focus, else the trigger. Focus does not scroll the hidden anchor
-  // back into view.
+  // Focus leaves a surface that hides with its anchor. The anchor comes
+  // first, then the trigger, then the focus-return chain. Focus does not
+  // scroll the hidden anchor back into view.
   const moveFocusOutOfHiddenSurface = () => {
     const container = contentRef.current;
-    const doc = container?.ownerDocument;
-    const active = doc?.activeElement ?? null;
+    const active = container?.ownerDocument.activeElement ?? null;
     if (container == null || active == null || !container.contains(active)) {
       return;
     }
-    const candidates = [
-      anchorOptionRef.current == null ? null : boundAnchorRef.current,
-      triggerElementRef.current,
-    ];
-    for (const candidate of candidates) {
-      if (isHTMLElement(candidate) && candidate.tabIndex >= 0) {
-        candidate.focus({preventScroll: true});
-        if (doc?.activeElement === candidate) {
-          return;
-        }
-      }
-    }
+    const takesFocus = (element: Element | null): Element | null =>
+      isHTMLElement(element) && element.tabIndex >= 0 ? element : null;
+    moveFocusOut([
+      takesFocus(
+        anchorOptionRef.current == null ? null : boundAnchorRef.current,
+      ),
+      takesFocus(triggerElementRef.current),
+    ]);
   };
   useCommittedRefInto(anchorHiddenRef, moveFocusOutOfHiddenSurface);
 

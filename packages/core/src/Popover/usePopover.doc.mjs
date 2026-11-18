@@ -26,7 +26,7 @@ export const docs = {
       name: 'anchorOutOfViewBehavior',
       type: "'stay' | 'hideWhileOutOfView'",
       description:
-        "What the popover does while its anchor is out of view (scrolled out of the viewport or a scrolling panel, or removed): 'stay' keeps its place and size while the anchor is scrolled away (a removed ref anchor still hides it, as any popover whose anchor is gone shows no surface); 'hideWhileOutOfView' hides it and takes no pointer input until the anchor returns, and moves focus inside it to the anchor or the trigger. It never closes for this, so onHide does not fire.",
+        "What the popover does while its anchor is out of view (scrolled out of the viewport or a scrolling panel, or removed): 'stay' keeps its place and size while the anchor is scrolled away (a removed ref anchor still hides it, as any popover whose anchor is gone shows no surface); 'hideWhileOutOfView' hides it and takes no pointer input until the anchor returns, and moves focus inside it to the anchor, the trigger or along the focus-return chain. It never closes for this, so onHide does not fire.",
       default: "'stay'",
     },
     {
@@ -44,7 +44,7 @@ export const docs = {
       name: 'onHide',
       type: '() => void',
       description:
-        'Callback fired when the popover is hidden. Use this to return focus to the trigger when needed.',
+        'Callback fired when the popover is hidden. Focus returns on its own as the popover closes, and there is no option to turn that off; to send focus somewhere else, focus that element here.',
     },
     {
       name: 'xstyle',
@@ -198,6 +198,11 @@ export const docs = {
       },
       {
         guidance: true,
+        description:
+          'Do not add your own focus return: the hook returns focus as the popover closes, to the opener or a stand-in, and has no option to turn that off.',
+      },
+      {
+        guidance: true,
         description: 'Use popover as the broad canonical surface target.',
       },
       {
@@ -230,7 +235,8 @@ export const docsDense = {
     onOutsidePress:
       'before an outside press closes it; preventDefault() keeps it open.',
     onShow: 'fires when popover becomes visible.',
-    onHide: 'fires when popover hides; use to return focus when needed.',
+    onHide:
+      'fires when popover hides; focus a specific element here to send focus there (focus return then leaves it).',
     xstyle: 'StyleX styles for content wrapper, after default surface.',
     hasLightDismiss: 'whether outside click dismisses popover.',
     hasEscapeDismiss:
