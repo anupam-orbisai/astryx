@@ -1202,26 +1202,15 @@ export async function renderPage(entry, options = {}) {
   const carriedCss = new Set();
   // An https image address the page changes with the URL API stays as
   // written: the API writes a query before the fragment, so no data: URI can
-  // stand in for it. A literal of a property the page reads into the API, in
-  // any file, counts too.
-  const urlProps = new Set(/** @type {string[]} */ (message.urlApiProps ?? []));
+  // stand in for it.
   const keptAsWritten = new Set(/** @type {string[]} */ (message.urlChanged ?? []));
   /** @type {{text: string, file: string, line: number, how?: 'url'}[]} */
   const builtList = [...(message.builtRemote ?? [])];
-  for (const keyed of /** @type {{value: string, key: string, text: string, file: string, line: number}[]} */ (message.keyedLiterals ?? [])) {
-    if (!urlProps.has(keyed.key)) continue;
-    keptAsWritten.add(keyed.value);
-    builtList.push({text: keyed.text, file: keyed.file, line: keyed.line, how: 'url'});
-  }
-  // When the page hands the URL API an address the render cannot trace (a
-  // callback's parameter, an import), any address may reach it: the script
-  // keeps every https image address as written.
-  let untraced = /** @type {{file: string, line: number} | null} */ (message.urlApiUntraced ?? null);
-  // A property the page reads into the URL API and changes after making it
-  // may hold anything.
-  for (const changed of /** @type {{key: string, file: string, line: number}[]} */ (message.changedProps ?? [])) {
-    if (!untraced && urlProps.has(changed.key)) untraced = {file: changed.file, line: changed.line};
-  }
+  // When the page hands the URL API an argument the render cannot trace (a
+  // property, a loop variable, a callback's parameter, an import), any
+  // address may reach it: the script keeps every https image address as
+  // written.
+  const untraced = /** @type {{file: string, line: number} | null} */ (message.urlApiUntraced ?? null);
   if (untraced) {
     for (const url of /** @type {string[]} */ (message.remoteLiterals ?? [])) keptAsWritten.add(url);
     const where = `${path.relative(dir, untraced.file).split(path.sep).join('/')}:${untraced.line}`;

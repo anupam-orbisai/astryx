@@ -884,7 +884,7 @@ describe('a render with images from the web', () => {
     }
   }, 120_000);
 
-  it('keeps an address as written that reaches the URL API through a property, a helper, or beside the first paint', async () => {
+  it('keeps an address as written that reaches the URL API through a helper or beside the first paint, and treats a property read as untraced', async () => {
     const dir = makeLinkedFixture('astryx-render-url-api-reach-', [
       'react',
       'react-dom',
@@ -948,10 +948,17 @@ describe('a render with images from the web', () => {
         changed.map(w => w.message.slice(0, w.message.indexOf(')') + 1)),
       ).toEqual(
         expect.arrayContaining([
-          "'https://cdn.example.com/a.png' (page.jsx:2)",
           "'https://cdn.example.com/b.png' (page.jsx:18)",
           "'https://cdn.example.com/d.png' (page.jsx:3)",
         ]),
+      );
+      // A property read (`items[0].photoUrl`) is not traced: one warning
+      // names that call, and the result lists the address the script keeps.
+      expect(
+        page.warnings.filter(w => w.message.includes('cannot trace')),
+      ).toHaveLength(1);
+      expect(page.remoteImages?.failed.map(f => f.url)).toEqual(
+        expect.arrayContaining(['https://cdn.example.com/a.png']),
       );
     } finally {
       removeLinkedFixture(dir);
@@ -1027,7 +1034,7 @@ describe('a render with images from the web', () => {
     }
   }, 180_000);
 
-  it('traces an address to the URL API through a loop variable and a default value', async () => {
+  it('traces an address to the URL API through a default value, and treats a loop variable as untraced', async () => {
     const dir = makeLinkedFixture('astryx-render-url-api-loop-', [
       'react',
       'react-dom',
@@ -1078,14 +1085,15 @@ describe('a render with images from the web', () => {
         const messages = page.warnings
           .filter(w => w.code === 'remote-asset')
           .map(w => w.message);
+        // A default value is traced; a loop variable is not.
         expect(
           messages.some(m => m.includes('changes with the URL API')),
           name,
-        ).toBe(true);
+        ).toBe(name === 'default.jsx');
         expect(
           messages.some(m => m.includes('cannot trace')),
           name,
-        ).toBe(false);
+        ).toBe(name === 'loop.jsx');
         expect(page.remoteImages?.failed, name).toEqual([
           expect.objectContaining({
             url: 'https://cdn.example.com/g.png',
@@ -1098,7 +1106,7 @@ describe('a render with images from the web', () => {
     }
   }, 180_000);
 
-  it('keeps a property array the URL API reads, and treats an array changed after it is made as untraced', async () => {
+  it('treats a property array and an array changed after it is made as untraced', async () => {
     const dir = makeLinkedFixture('astryx-render-url-api-arrays-', [
       'react',
       'react-dom',
@@ -1153,13 +1161,7 @@ describe('a render with images from the web', () => {
           .filter(w => w.code === 'remote-asset')
           .map(w => w.message);
         expect(
-          messages.some(m =>
-            m.includes(
-              name === 'property.jsx'
-                ? 'changes with the URL API'
-                : 'cannot trace',
-            ),
-          ),
+          messages.some(m => m.includes('cannot trace')),
           name,
         ).toBe(true);
         expect(
@@ -1317,6 +1319,79 @@ describe('a render with images from the web', () => {
           expect(page.remoteImages?.fetched ?? []).not.toContain(
             'https://cdn.example.com/s1.png',
           );
+        }
+      }
+    } finally {
+      removeLinkedFixture(dir);
+    }
+  }, 180_000);
+
+  it('treats a JSON value and a destructured name as untraced, and still carries a kept address a stylesheet names', async () => {
+    const dir = makeLinkedFixture('astryx-render-url-api-more-', [
+      'react',
+      'react-dom',
+    ]);
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'data.json'),
+        JSON.stringify({hero: 'https://cdn.example.com/h.png'}),
+      );
+      fs.writeFileSync(
+        path.join(dir, 'kept.css'),
+        '.k { background-image: url(https://cdn.example.com/k.png); }\n',
+      );
+      const pages = {
+        'json.jsx': [
+          "import data from './data.json';",
+          'export default function Page() {',
+          '  const url = new URL(data.hero);',
+          "  url.searchParams.set('w', '480');",
+          '  return <main><img src={data.hero} alt="Hero" /><p>{url.href}</p></main>;',
+          '}',
+          '',
+        ],
+        'destructured.jsx': [
+          "const product = {photos: ['https://cdn.example.com/h.png']};",
+          'const {photos} = product;',
+          'export default function Page() {',
+          '  const url = new URL(photos[0]);',
+          "  url.searchParams.set('w', '480');",
+          '  return <main><p>{url.href}</p></main>;',
+          '}',
+          '',
+        ],
+        'stylesheet.jsx': [
+          "import './kept.css';",
+          "const photo = 'https://cdn.example.com/k.png';",
+          'export default function Page() {',
+          '  const url = new URL(photo);',
+          "  url.searchParams.set('w', '480');",
+          '  return <main className="k"><p>{url.href}</p></main>;',
+          '}',
+          '',
+        ],
+      };
+      const data = `data:image/png;base64,${PNG.toString('base64')}`;
+      for (const [name, lines] of Object.entries(pages)) {
+        const file = path.join(dir, name);
+        fs.writeFileSync(file, lines.join('\n'));
+        const {fetch} = fetchFrom({
+          'https://cdn.example.com/h.png': png(),
+          'https://cdn.example.com/k.png': png(),
+        });
+        const page = await renderPage(file, {cwd: dir, remoteImages: {fetch}});
+        const script = page.html.slice(page.html.lastIndexOf('<script>'));
+        expect(script, name).not.toContain(`${data}#`);
+        if (name === 'stylesheet.jsx') {
+          expect(page.html).toContain(`url("${data}")`);
+          expect(page.remoteImages?.failed.map(f => f.url)).toEqual([
+            'https://cdn.example.com/k.png',
+          ]);
+        } else {
+          expect(
+            page.warnings.some(w => w.message.includes('cannot trace')),
+            name,
+          ).toBe(true);
         }
       }
     } finally {

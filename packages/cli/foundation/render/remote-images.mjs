@@ -353,7 +353,6 @@ export function remoteImages({
      * @param {string} reason
      */
     keep(url, reason) {
-      asked.add(url);
       if (!kept.has(url)) kept.set(url, reason);
     },
     /** Stop the render's time limit. */
@@ -378,6 +377,8 @@ export function remoteImages({
         else if ('uri' in result) fetched.push(url);
         else failed.push({url, reason: result.reason});
       }
+      // Then each address the script keeps that nothing asked for.
+      for (const [url, why] of kept) if (!asked.has(url)) failed.push({url, reason: why});
       return {fetched, failed};
     },
   };

@@ -161,23 +161,8 @@ function srcsetCandidates(value) {
 const builtRemote = [];
 /** https image literals a file hands to the URL API: kept as written. @type {Set<string>} */
 const urlChanged = new Set();
-/** Property names the page reads into the URL API (`new URL(item.photoUrl)`). @type {Set<string>} */
-const urlApiProps = new Set();
 /** The first argument to the URL API the page's files cannot trace, if any. @type {{file: string, line: number} | null} */
 let urlApiUntraced = null;
-/**
- * Property names whose array the page changes after making it
- * (`product.photos.push(…)`, `product.photos = …`), with where first.
- * @type {Map<string, {file: string, line: number}>}
- */
-const changedProps = new Map();
-/**
- * https image literals the page writes as a property's or an attribute's
- * value, with where: one whose property the page reads into the URL API in
- * any file is kept as written too.
- * @type {{value: string, key: string, text: string, file: string, line: number}[]}
- */
-const keyedLiterals = [];
 /** Local files inlined from asset imports. */
 /** @type {Set<string>} */
 const assetsInlined = new Set();
@@ -832,14 +817,14 @@ function reachesLink(p) {
 
 /**
  * The literals a file hands to the URL API (`new URL(…)`, `URL.parse(…)`,
- * also through `globalThis`, `window` or `self`): written there, through a
- * variable, through a parameter of a function only this file calls, or
- * through a property read (`new URL(item.photoUrl)`), whose name goes to
- * `urlApiProps`, for a literal of that property in any file. The API writes
- * a query before the fragment, so no data: URI can stand in for such an
+ * also through `globalThis`, `window` or `self`). The render traces an
+ * argument only through forms it can read whole: a literal, a template, `+`,
+ * a choice (`a ? b : c`, `a || b`), a variable set once, and a parameter of
+ * a function only this file calls, with its default value. The API writes a
+ * query before the fragment, so no data: URI can stand in for such an
  * address: each https image literal among them goes to `urlChanged`, with a
- * warning. An argument the file cannot trace (a callback's parameter, an
- * import, a call's result) sets `urlApiUntraced`.
+ * warning. Any other argument (a property, a loop variable, a callback's
+ * parameter, an import, a call's result) sets `urlApiUntraced`.
  * @param {any} program the file's Program path
  * @param {string} filename
  * @returns {Set<any>} the literal nodes
@@ -858,15 +843,11 @@ function urlApiLiterals(program, filename) {
   /** @param {any} at @param {number} depth */
   const follow = (at, depth) => {
     const n = at?.node;
-    if (!n) {
+    if (!n || depth > 8) {
       untraced(at);
       return;
     }
     if (seen.has(n)) return;
-    if (depth > 8) {
-      untraced(at);
-      return;
-    }
     seen.add(n);
     if (at.isStringLiteral() || (at.isTemplateLiteral() && n.expressions.length === 0)) {
       nodes.add(n);
@@ -883,12 +864,6 @@ function urlApiLiterals(program, filename) {
       for (const part of at.get('expressions')) follow(part, depth + 1);
       return;
     }
-    if (at.isArrayExpression()) {
-      for (const element of at.get('elements')) {
-        if (element.node) follow(element.isSpreadElement() ? element.get('argument') : element, depth + 1);
-      }
-      return;
-    }
     if (at.isBinaryExpression({operator: '+'}) || at.isLogicalExpression()) {
       follow(at.get('left'), depth + 1);
       follow(at.get('right'), depth + 1);
@@ -903,36 +878,14 @@ function urlApiLiterals(program, filename) {
       follow(at.get('expression'), depth + 1);
       return;
     }
-    if (at.isMemberExpression() || at.isOptionalMemberExpression?.()) {
-      const key = memberName(n);
-      if (key) urlApiProps.add(key);
-      else untraced(at);
-      return;
-    }
-    if (!at.isIdentifier()) {
-      untraced(at);
-      return;
-    }
-    const binding = at.scope.getBinding(n.name);
+    const binding = at.isIdentifier() ? at.scope.getBinding(n.name) : null;
     if (!binding || binding.kind === 'module' || binding.constantViolations.length > 0) {
       untraced(at);
       return;
     }
-    const key = destructuredKey(binding);
-    if (key) {
-      urlApiProps.add(key);
-      return;
-    }
-    // A loop variable (`for (const src of gallery)`) takes each element of
-    // what it walks.
-    const loop = binding.path.parentPath?.parentPath;
-    if (binding.path.isVariableDeclarator() && loop?.isForOfStatement() && loop.node.left === binding.path.parentPath.node) {
-      follow(loop.get('right'), depth + 1);
-      return;
-    }
-    if (binding.path.isVariableDeclarator() && binding.path.node.id === binding.identifier) {
-      // An array the page changes after it makes it may hold anything.
-      if (binding.path.get('init').isArrayExpression() && changesAfter(binding)) {
+    if (binding.path.isVariableDeclarator() && binding.path.node.id === binding.identifier && binding.path.node.init) {
+      const loop = binding.path.parentPath?.parentPath;
+      if (loop?.isForOfStatement() || loop?.isForInStatement()) {
         untraced(at);
         return;
       }
@@ -941,15 +894,15 @@ function urlApiLiterals(program, filename) {
     }
     // A parameter: its default value, and the argument of each call.
     const param = binding.path.parentPath?.isAssignmentPattern() ? binding.path.parentPath : binding.path;
-    const withDefault = param.isAssignmentPattern() ? param : null;
-    if (withDefault) follow(withDefault.get('right'), depth + 1);
+    const withDefault = param.isAssignmentPattern() && param.node.left === binding.identifier ? param : null;
     const fn = binding.kind === 'param' ? param.parentPath : null;
-    const index = fn?.node?.params?.indexOf(param.node) ?? -1;
+    const index = fn?.isFunction() ? fn.node.params.indexOf(param.node) : -1;
     const calls = index < 0 ? null : callsOf(fn);
     if (!calls) {
       untraced(at);
       return;
     }
+    if (withDefault) follow(withDefault.get('right'), depth + 1);
     for (const call of calls) {
       if (index >= call.node.arguments.length && withDefault) continue;
       follow(call.get(`arguments.${index}`), depth + 1);
@@ -965,14 +918,7 @@ function urlApiLiterals(program, filename) {
   /** @param {any} p */
   const argument = p => {
     site = p;
-    const first = p.get('arguments.0');
-    if (first?.isSpreadElement?.()) untraced(first);
-    else follow(first, 0);
-  };
-  /** @param {any} n @param {any} p */
-  const changes = (n, p) => {
-    const key = n?.type === 'MemberExpression' ? memberName(n) : null;
-    if (key && !changedProps.has(key)) changedProps.set(key, {file: filename, line: p.node.loc?.start.line ?? 0});
+    follow(p.get('arguments.0'), 0);
   };
   program.traverse({
     NewExpression(/** @type {any} */ p) {
@@ -981,40 +927,9 @@ function urlApiLiterals(program, filename) {
     CallExpression(/** @type {any} */ p) {
       const callee = p.node.callee;
       if (callee.type === 'MemberExpression' && memberName(callee) === 'parse' && isUrl(callee.object)) argument(p);
-      // `product.photos.push(…)`
-      if (callee.type === 'MemberExpression' && ARRAY_CHANGES.has(memberName(callee) ?? '')) changes(callee.object, p);
-    },
-    AssignmentExpression(/** @type {any} */ p) {
-      // `product.photos = …` and `product.photos[0] = …`
-      const left = p.node.left;
-      changes(left, p);
-      if (left.type === 'MemberExpression') changes(left.object, p);
     },
   });
   return nodes;
-}
-
-/** The array methods that change the array they are called on. */
-const ARRAY_CHANGES = new Set(['push', 'unshift', 'splice', 'fill', 'copyWithin', 'reverse', 'sort']);
-
-/**
- * Whether the page may change the array a binding holds after making it:
- * a method that changes it, an assignment to an element, or a call it is
- * handed to.
- * @param {any} binding
- */
-function changesAfter(binding) {
-  return binding.referencePaths.some((/** @type {any} */ ref) => {
-    const parent = ref.parentPath;
-    if (parent?.isCallExpression() && parent.node.arguments.includes(ref.node)) return true;
-    if (!parent?.isMemberExpression() || parent.node.object !== ref.node) return false;
-    const use = parent.parentPath;
-    return (
-      (use?.isCallExpression() && use.node.callee === parent.node && ARRAY_CHANGES.has(memberName(parent.node) ?? '')) ||
-      (use?.isAssignmentExpression() && use.node.left === parent.node) ||
-      use?.isUpdateExpression()
-    );
-  });
 }
 
 /**
@@ -1025,25 +940,6 @@ function changesAfter(binding) {
 function memberName(n) {
   if (!n.computed && n.property.type === 'Identifier') return n.property.name;
   return n.property.type === 'StringLiteral' ? n.property.value : null;
-}
-
-/**
- * The property a destructured name reads (`const {photoUrl} = item`,
- * `({photoUrl}) => …`), or null.
- * @param {any} binding
- * @returns {string | null}
- */
-function destructuredKey(binding) {
-  const pattern = binding.path.isVariableDeclarator() ? binding.path.node.id : binding.path.node;
-  if (pattern?.type !== 'ObjectPattern') return null;
-  for (const prop of pattern.properties) {
-    if (prop.type !== 'ObjectProperty') continue;
-    const value = prop.value.type === 'AssignmentPattern' ? prop.value.left : prop.value;
-    if (value !== binding.identifier) continue;
-    if (!prop.computed && prop.key.type === 'Identifier') return prop.key.name;
-    return prop.key.type === 'StringLiteral' ? prop.key.value : null;
-  }
-  return null;
 }
 
 /**
@@ -1188,29 +1084,6 @@ function pagePlugin(filename, browser = false) {
     const {start, end} = p.node;
     const text = typeof start === 'number' && typeof end === 'number' ? p.hub?.file?.code?.slice(start, end) : null;
     builtRemote.push({text: text ?? '(an address built in code)', file: filename, line: p.node.loc?.start.line ?? 0});
-  };
-  /** @param {any} p */
-  const sourceText = p => {
-    const {start, end} = p.node;
-    return typeof start === 'number' && typeof end === 'number' ? (p.hub?.file?.code?.slice(start, end) ?? null) : null;
-  };
-  /**
-   * Note an https image literal; one that is a property's or an attribute's
-   * value is kept with where, for the URL API check across files.
-   * @param {any} p
-   * @param {string} value
-   * @param {ReturnType<typeof imageLiteralKind>} why
-   */
-  const noteLiteral = (p, value, why) => {
-    noteRemoteLiteral(value, why);
-    // An element of an array a property holds (`photos: ['…']`) goes by
-    // that property's name.
-    let holder = p;
-    while (holder.parentPath?.isArrayExpression()) holder = holder.parentPath;
-    const named = why ? nameOfValue(holder) : null;
-    if (named) {
-      keyedLiterals.push({value, key: named.name, text: sourceText(p) ?? value, file: filename, line: p.node.loc?.start.line ?? 0});
-    }
   };
   /** The literals this file hands to the URL API. @type {Set<any>} */
   let urlReach = new Set();
@@ -1373,7 +1246,7 @@ function pagePlugin(filename, browser = false) {
         // chain gets its own warning.
         if (p.parentPath.isBinaryExpression({operator: '+'})) return;
         if (urlReach.has(p.node)) return;
-        noteLiteral(p, p.node.value, imageLiteralKind(p.node.value, p));
+        noteRemoteLiteral(p.node.value, imageLiteralKind(p.node.value, p));
       },
       TemplateLiteral(/** @type {any} */ p) {
         if (browser || p.parentPath.isTaggedTemplateExpression()) return;
@@ -1381,7 +1254,7 @@ function pagePlugin(filename, browser = false) {
           if (p.parentPath.isBinaryExpression({operator: '+'})) return;
           const value = p.node.quasis[0]?.value.cooked ?? '';
           if (urlReach.has(p.node)) return;
-          noteLiteral(p, value, imageLiteralKind(value, p));
+          noteRemoteLiteral(value, imageLiteralKind(value, p));
           return;
         }
         builtAddress(p, /^https:\/\//i.test(p.node.quasis[0]?.value.cooked ?? ''));
@@ -2443,10 +2316,7 @@ try {
     remoteSrcsets: [...srcsetLiterals],
     builtRemote,
     urlChanged: [...urlChanged],
-    urlApiProps: [...urlApiProps],
     urlApiUntraced,
-    changedProps: [...changedProps].map(([key, at]) => ({key, ...at})),
-    keyedLiterals,
     logs,
     script: script?.code ?? null,
     scriptModules: script?.modules ?? 0,
