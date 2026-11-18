@@ -752,7 +752,8 @@ const CARRIED_PRELUDE =
  * everywhere.
  * @param {string} script
  * @param {Map<string, string>} rewrites
- * @param {Set<string>} carried the values the first paint numbers
+ * @param {Map<string, number>} carried each value the first paint carries, with
+ *   the number its mark gives it
  * @returns {string}
  */
 export function withCarriedPaths(script, rewrites, carried) {
@@ -771,11 +772,16 @@ export function withCarriedPaths(script, rewrites, carried) {
   marked += script.slice(at);
   // The script's copy of a carried https address ends in an empty fragment
   // (`data:…#`), so code that extends the address still draws; a read keeps it.
-  const fragment = [...rewrites.values()].map(now => now.startsWith('data:') && now.endsWith('#'));
+  /** @type {Set<number>} */
+  const fragment = new Set();
+  for (const [was, i] of carried) {
+    const now = rewrites.get(was);
+    if (now?.startsWith('data:') && now.endsWith('#')) fragment.add(i);
+  }
   const read =
     CARRIED_PRELUDE +
     inlineCarried(marked, rewrites).replace(/\uE000(\d+)\uE001/g, (_, i, offset, all) =>
-      fragment[Number(i)]
+      fragment.has(Number(i))
         ? `(${CARRIED_VALUES}[${i}]+"#")`
         : `${/[\w$]/.test(all[offset - 1] ?? '') ? ' ' : ''}${CARRIED_VALUES}[${i}]`,
     );
@@ -793,16 +799,15 @@ export function withCarriedPaths(script, rewrites, carried) {
  * tag reads, not text the page shows (`children`). In script order.
  * @param {string} script
  * @param {Map<string, string>} rewrites
- * @param {Set<string>} carried
+ * @param {Map<string, number>} carried
  * @returns {{start: number, end: number, index: number}[]}
  */
 function carriedTokens(script, rewrites, carried) {
   /** @type {Map<string, number>} */
   const indexOf = new Map();
-  let index = -1;
   for (const [was] of rewrites) {
-    index += 1;
-    if (!carried.has(was) || /["'`\\\n]/.test(was)) continue;
+    const index = carried.get(was);
+    if (index === undefined || /["'`\\\n]/.test(was)) continue;
     if (['"', "'", '`'].some(q => script.includes(`${q}${was}${q}`))) indexOf.set(was, index);
   }
   if (indexOf.size === 0) return [];
@@ -982,7 +987,7 @@ export function assetRef(ref, at) {
  * link (`href`) loads nothing, so it is left alone.
  * @param {string} text markup or CSS
  * @param {'html' | 'css'} kind
- * @param {{dir: string, root: string, warnings: RenderWarning[], counted: Set<string>, localAssets: Set<string>, leaveLargeStyleAssets?: boolean, rewrites?: Map<string, string>, carried?: Set<string>, remote?: Map<string, import('./remote-images.mjs').RemoteImage>}} ctx
+ * @param {{dir: string, root: string, warnings: RenderWarning[], counted: Set<string>, localAssets: Set<string>, leaveLargeStyleAssets?: boolean, rewrites?: Map<string, string>, carried?: Map<string, number>, remote?: Map<string, import('./remote-images.mjs').RemoteImage>}} ctx
  *   `leaveLargeStyleAssets`: a stylesheet's file too large to inline is left
  *   as it is and named, as a missing one is, rather than refused;
  *   `rewrites`: each attribute value the markup's rewrite replaced, as the
@@ -1136,9 +1141,9 @@ const builtOf = {text: '', at: /** @type {Set<number>} */ (new Set())};
  * @param {(ref: string) => string | null} resolve
  * @param {Map<string, string>} [rewrites] gets each attribute value replaced,
  *   as the page wrote it, with what it became
- * @param {Set<string>} [marked] number each replaced value in the markup
- *   ({@link CARRY_ATTR}), so the page's script reads it there, and add it
- *   to this set
+ * @param {Map<string, number>} [marked] number each replaced value in the
+ *   markup ({@link CARRY_ATTR}), so the page's script reads it there, and
+ *   add it to this map with its number
  */
 function mapAssetRefs(text, kind, resolve, rewrites, marked) {
   /**
@@ -1156,8 +1161,9 @@ function mapAssetRefs(text, kind, resolve, rewrites, marked) {
     // read: the first of its name on a real start tag, outside <noscript>
     // and <template>.
     if (!marked || !builtAttrs(text).has(at + 1)) return '';
-    marked.add(was);
-    return ` ${CARRY_ATTR}="${attr.toLowerCase()}:${[...rewrites.keys()].indexOf(was)}"`;
+    // The number stays the value's own, whatever later leaves the rewrites.
+    if (!marked.has(was)) marked.set(was, [...rewrites.keys()].indexOf(was));
+    return ` ${CARRY_ATTR}="${attr.toLowerCase()}:${marked.get(was)}"`;
   };
   /**
    * @param {string} value
@@ -1408,7 +1414,7 @@ export async function renderPage(entry, options = {}) {
     rewrites: /** @type {Map<string, string>} */ (new Map()),
     // The page's script reads the data the markup carries; a markup-only
     // render has no script.
-    carried: options.markupOnly ? undefined : /** @type {Set<string>} */ (new Set()),
+    carried: options.markupOnly ? undefined : /** @type {Map<string, number>} */ (new Map()),
     remote: remote?.results,
   };
   /**
@@ -1593,7 +1599,7 @@ export async function renderPage(entry, options = {}) {
   for (const [was, now] of ctx.rewrites) {
     if (/^https:\/\/\S+$/i.test(was) && now.startsWith('data:') && !now.includes('#')) ctx.rewrites.set(was, `${now}#`);
   }
-  const drawn = script === null ? null : withCarriedPaths(script, ctx.rewrites, ctx.carried ?? new Set());
+  const drawn = script === null ? null : withCarriedPaths(script, ctx.rewrites, ctx.carried ?? new Map());
   // The script draws what the markup does not show yet (a menu as it opens,
   // the next tab), so the rules every class name it holds needs stay too.
   const kept = script ? new Set([...used, ...(script.match(/[A-Za-z_][\w-]*/g) ?? [])]) : used;

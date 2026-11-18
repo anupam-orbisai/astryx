@@ -239,7 +239,7 @@ export default function Page() {
 describe('withCarriedPaths', () => {
   it('reads an image path the script names from the markup, and leaves text the page shows as written', () => {
     const rewrites = new Map([['./photo.png', 'data:image/png;base64,AAAA']]);
-    const script = withCarriedPaths(`a({src:"./photo.png",children:"./photo.png"});b('./photo.png');c({children: \`./photo.png\`})`, rewrites, new Set(rewrites.keys()));
+    const script = withCarriedPaths(`a({src:"./photo.png",children:"./photo.png"});b('./photo.png');c({children: \`./photo.png\`})`, rewrites, new Map([['./photo.png', 0]]));
     expect(script).not.toContain('data:image/png');
     expect(script.endsWith(`a({src:__astryxCarried[0],children:"./photo.png"});b(__astryxCarried[0]);c({children: \`./photo.png\`})`)).toBe(true);
     expect(script).toContain(`'[${CARRY_ATTR}]'`);
@@ -247,14 +247,23 @@ describe('withCarriedPaths', () => {
 
   it('writes the data itself where a read cannot go: an object key, a tagged template, a value the first paint does not carry, or a script that would not parse', () => {
     const rewrites = new Map([['./photo.png', 'data:image/png;base64,AAAA']]);
-    const carried = new Set(rewrites.keys());
-    expect(withCarriedPaths('f("./photo.png")', rewrites, new Set())).toBe('f("data:image/png;base64,AAAA")');
+    const carried = new Map([['./photo.png', 0]]);
+    expect(withCarriedPaths('f("./photo.png")', rewrites, new Map())).toBe('f("data:image/png;base64,AAAA")');
     expect(withCarriedPaths(`m={"./photo.png":1};f("./photo.png")`, rewrites, carried)).toMatch(
       /m=\{"data:image\/png;base64,AAAA":1\};f\(__astryxCarried\[0\]\)$/,
     );
     expect(withCarriedPaths('f=()=>tag`./photo.png`', rewrites, carried)).toMatch(/f=\(\)=>tag`data:image\/png;base64,AAAA`$/);
     expect(withCarriedPaths('f=()=>{return"./photo.png"}', rewrites, carried)).toMatch(/f=\(\)=>\{return __astryxCarried\[0\]\}$/);
     expect(withCarriedPaths('f("./photo.png"', rewrites, carried)).toBe('f("data:image/png;base64,AAAA"');
+  });
+});
+
+describe('withCarriedPaths numbering', () => {
+  it('reads each value by the number its first-paint mark gives it, even after an earlier value left the rewrites', () => {
+    // ./a.png was 0 when the markup was marked, then left (kept as written).
+    const rewrites = new Map([['./b.png', 'data:image/png;base64,BBBB']]);
+    const script = withCarriedPaths('f("./a.png");g("./b.png")', rewrites, new Map([['./b.png', 1]]));
+    expect(script.endsWith('f("./a.png");g(__astryxCarried[1])')).toBe(true);
   });
 });
 
