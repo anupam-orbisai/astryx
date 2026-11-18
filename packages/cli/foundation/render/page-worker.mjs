@@ -843,14 +843,19 @@ function urlApiLiterals(program, filename) {
   const nodes = new Set();
   /** @type {Set<any>} */
   const seen = new Set();
+  /** The URL API call being traced, for the line of an argument with no node. @type {any} */
+  let site = null;
   /** @param {any} at */
   const untraced = at => {
-    urlApiUntraced ??= {file: filename, line: at.node?.loc?.start.line ?? 0};
+    urlApiUntraced ??= {file: filename, line: (at?.node ?? site?.node)?.loc?.start.line ?? 0};
   };
   /** @param {any} at @param {number} depth */
   const follow = (at, depth) => {
     const n = at?.node;
-    if (!n) return;
+    if (!n) {
+      untraced(at);
+      return;
+    }
     if (seen.has(n)) return;
     if (depth > 8) {
       untraced(at);
@@ -870,6 +875,12 @@ function urlApiLiterals(program, filename) {
     }
     if (at.isTemplateLiteral()) {
       for (const part of at.get('expressions')) follow(part, depth + 1);
+      return;
+    }
+    if (at.isArrayExpression()) {
+      for (const element of at.get('elements')) {
+        if (element.node) follow(element.isSpreadElement() ? element.get('argument') : element, depth + 1);
+      }
       return;
     }
     if (at.isBinaryExpression({operator: '+'}) || at.isLogicalExpression()) {
@@ -906,18 +917,32 @@ function urlApiLiterals(program, filename) {
       urlApiProps.add(key);
       return;
     }
+    // A loop variable (`for (const src of gallery)`) takes each element of
+    // what it walks.
+    const loop = binding.path.parentPath?.parentPath;
+    if (binding.path.isVariableDeclarator() && loop?.isForOfStatement() && loop.node.left === binding.path.parentPath.node) {
+      follow(loop.get('right'), depth + 1);
+      return;
+    }
     if (binding.path.isVariableDeclarator() && binding.path.node.id === binding.identifier) {
       follow(binding.path.get('init'), depth + 1);
       return;
     }
-    const fn = binding.kind === 'param' ? binding.path.parentPath : null;
-    const index = fn?.node?.params?.indexOf(binding.path.node) ?? -1;
+    // A parameter: its default value, and the argument of each call.
+    const param = binding.path.parentPath?.isAssignmentPattern() ? binding.path.parentPath : binding.path;
+    const withDefault = param.isAssignmentPattern() ? param : null;
+    if (withDefault) follow(withDefault.get('right'), depth + 1);
+    const fn = binding.kind === 'param' ? param.parentPath : null;
+    const index = fn?.node?.params?.indexOf(param.node) ?? -1;
     const calls = index < 0 ? null : callsOf(fn);
     if (!calls) {
       untraced(at);
       return;
     }
-    for (const call of calls) follow(call.get(`arguments.${index}`), depth + 1);
+    for (const call of calls) {
+      if (index >= call.node.arguments.length && withDefault) continue;
+      follow(call.get(`arguments.${index}`), depth + 1);
+    }
   };
   /** @param {any} callee */
   const isUrl = callee =>
@@ -928,6 +953,7 @@ function urlApiLiterals(program, filename) {
       memberName(callee) === 'URL');
   /** @param {any} p */
   const argument = p => {
+    site = p;
     const first = p.get('arguments.0');
     if (first?.isSpreadElement?.()) untraced(first);
     else follow(first, 0);

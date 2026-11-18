@@ -343,6 +343,17 @@ export function remoteImages({
         ...earlier.map(url => inflight.get(url)),
       ]);
     },
+    /**
+     * Note an address the render keeps as written without asking for it, with
+     * why, so the result lists it among those not fetched.
+     * @param {string} url
+     * @param {string} reason
+     */
+    keep(url, reason) {
+      if (results.has(url)) return;
+      asked.add(url);
+      results.set(url, {reason});
+    },
     /** Stop the render's time limit. */
     done() {
       if (timer !== null) clearTimeout(timer);

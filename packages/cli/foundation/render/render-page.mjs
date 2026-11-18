@@ -1326,8 +1326,16 @@ export async function renderPage(entry, options = {}) {
     });
   }
   // The script keeps such an address as written, also where the first paint
-  // carries it.
-  for (const url of keptAsWritten) ctx.rewrites.delete(url);
+  // carries it, and the result lists it with why.
+  for (const url of keptAsWritten) {
+    ctx.rewrites.delete(url);
+    remote?.keep(
+      url,
+      untraced
+        ? 'the page hands the URL API an address the render cannot trace, so the script keeps each address as written'
+        : 'the page changes it with the URL API, so a data: URI cannot stand in for it',
+    );
+  }
   if (untraced) {
     for (const url of [...ctx.rewrites.keys()]) if (/^https:\/\//i.test(url)) ctx.rewrites.delete(url);
   }
