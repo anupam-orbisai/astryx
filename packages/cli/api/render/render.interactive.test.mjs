@@ -466,6 +466,9 @@ const SHAPES = [
   \`<script><!--<script>\${IMG}</script>x</script>\`,
   \`<span data-tip='\${IMG}'>tip</span>\`,
   \`<svg><![CDATA[ a > b \${IMG} ]]></svg>\`,
+  \`<x.y title='\${IMG}'>name</x.y>\`,
+  \`<math></svg><![CDATA[ a > \${IMG} ]]></math>\`,
+  '<frame src="./photo.png">',
 ];
 export default function Page() {
   return (
@@ -477,7 +480,8 @@ export default function Page() {
 }
 `,
     );
-    put('src/shapes/other.png', fs.readFileSync(path.join(dir, 'src/shapes/photo.png')));
+    // Other bytes, so other.png's data differs from photo.png's.
+    put('src/shapes/other.png', Buffer.concat([fs.readFileSync(path.join(dir, 'src/shapes/photo.png')), Buffer.from([0])]));
     put(
       'src/shapes/two-src.tsx',
       `const OTHER = './other.png';
@@ -486,6 +490,19 @@ export default function Page() {
     <main>
       <div dangerouslySetInnerHTML={{__html: '<img src="./photo.png" src="./other.png" alt="Two">'}} />
       <p>{typeof document === 'undefined' ? '' : <img src={OTHER} alt="Drawn" />}</p>
+    </main>
+  );
+}
+`,
+    );
+    put(
+      'src/shapes/alt-gt.tsx',
+      `const PHOTO = './photo.png';
+export default function Page() {
+  return (
+    <main>
+      <div dangerouslySetInnerHTML={{__html: '<img src="./photo.png" srcset="./photo.png 2x" alt="Step 1 > Step 2" width="72">'}} />
+      <p>{typeof document === 'undefined' ? '' : <img src={PHOTO} alt="Drawn" />}</p>
     </main>
   );
 }
@@ -504,7 +521,7 @@ export default function Page() {
 }
 `,
     );
-    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html'], ['src/shapes/nested-template.tsx', 'nested-template.html'], ['src/shapes/comment-textarea.tsx', 'comment-textarea.html'], ['src/shapes/raw-elements.tsx', 'raw-elements.html'], ['src/shapes/two-src.tsx', 'two-src.html']]) {
+    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html'], ['src/shapes/nested-template.tsx', 'nested-template.html'], ['src/shapes/comment-textarea.tsx', 'comment-textarea.html'], ['src/shapes/raw-elements.tsx', 'raw-elements.html'], ['src/shapes/two-src.tsx', 'two-src.html'], ['src/shapes/alt-gt.tsx', 'alt-gt.html']]) {
       await render(page, {cwd: dir, out});
     }
     /** @param {string} file */
@@ -552,6 +569,11 @@ export default function Page() {
     expect(read('two-src.html')).not.toContain('src:1');
     const two = await drawn('two-src.html');
     expect(two.drawn).toMatch(/^data:image\/png;base64,/);
+    // An element's marks come once, after its last attribute, even when a
+    // value before them holds a '>'.
+    expect(read('alt-gt.html')).toMatch(new RegExp(`alt="Step 1 > Step 2" width="72" ${CARRY_ATTR}="src:0 srcset:1"`));
+    const altGt = await drawn('alt-gt.html');
+    expect(altGt.drawn).toMatch(/^data:image\/png;base64,/);
   }, 120_000);
 
   it("keeps the first paint when the page's script throws", async () => {

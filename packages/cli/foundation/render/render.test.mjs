@@ -358,6 +358,11 @@ describe('scanHtml', () => {
     expect(pieces('<![CDATA[ a > b ]]>')).toEqual(['comment:<![CDATA[ a >', 'text: b ]]>']);
   });
 
+  it('reads a tag name up to white space, / or >, and closes only an open foreign root of its own name', () => {
+    expect(pieces(`<x.y title='<img src="a.png">'>b`)).toEqual([`start:<x.y title='<img src="a.png">'>`, 'text:b']);
+    expect(pieces('<math></svg><![CDATA[ a > <img src="a.png"> ]]></math>')).toEqual(['start:<math>', 'end:</svg>', 'cdata:<![CDATA[ a > <img src="a.png"> ]]>', 'end:</math>']);
+  });
+
   it('says where each attribute is', () => {
     const html = `<span data-tip='<img src="a.png">' id=b>`;
     const [tag] = /** @type {any[]} */ ([...scanHtml(html)]);

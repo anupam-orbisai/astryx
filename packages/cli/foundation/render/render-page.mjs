@@ -1102,35 +1102,6 @@ function unread(text) {
 /** The last text {@link unread} read: one markup pass asks for it per attribute. */
 const unreadOf = {text: '', ranges: /** @type {[number, number][]} */ ([])};
 
-/**
- * Where each attribute a browser builds starts in `text`: the first of each
- * name on a real start tag (the scanner's own pieces, so a tag inside a
- * comment, raw text or another attribute's value is none), outside the
- * ranges {@link unread} names.
- * @param {string} text
- * @returns {Set<number>}
- */
-function builtAttrs(text) {
-  if (text === builtOf.text) return builtOf.at;
-  const ranges = unread(text);
-  /** @type {Set<number>} */
-  const at = new Set();
-  for (const piece of scanHtml(text)) {
-    if (piece.kind !== 'start' || ranges.some(([from, to]) => piece.start > from && piece.start < to)) continue;
-    const seen = new Set();
-    piece.attrs.forEach(([name], k) => {
-      if (seen.has(name)) return;
-      seen.add(name);
-      at.add(piece.spans[k][0]);
-    });
-  }
-  builtOf.text = text;
-  builtOf.at = at;
-  return at;
-}
-
-/** The last text {@link builtAttrs} read. */
-const builtOf = {text: '', at: /** @type {Set<number>} */ (new Set())};
 
 /**
  * Each reference to a file in markup (`src`, `poster`, `srcset`, and `url()`
@@ -1147,23 +1118,19 @@ const builtOf = {text: '', at: /** @type {Set<number>} */ (new Set())};
  */
 function mapAssetRefs(text, kind, resolve, rewrites, marked) {
   /**
-   * Record a replaced value; the attribute that marks it, when marking.
-   * @param {string} attr
+   * What each replaced value became, for the marks the first paint gets.
+   * @type {Map<string, string[]>}
+   */
+  const became = new Map();
+  /**
+   * Record a replaced value.
    * @param {string} was
    * @param {string} now
-   * @param {number} at where the white space before the attribute is in `text`
-   * @param {string} text the markup it is in
    */
-  const carry = (attr, was, now, at, text) => {
-    if (!rewrites) return '';
+  const carry = (was, now) => {
+    if (!rewrites) return;
     if (!rewrites.has(was)) rewrites.set(was, now);
-    // Only an attribute a browser builds carries anything the script can
-    // read: the first of its name on a real start tag, outside <noscript>
-    // and <template>.
-    if (!marked || !builtAttrs(text).has(at + 1)) return '';
-    // The number stays the value's own, whatever later leaves the rewrites.
-    if (!marked.has(was)) marked.set(was, [...rewrites.keys()].indexOf(was));
-    return ` ${CARRY_ATTR}="${attr.toLowerCase()}:${marked.get(was)}"`;
+    became.set(now, [...(became.get(now) ?? []), was]);
   };
   /**
    * @param {string} value
@@ -1177,37 +1144,81 @@ function mapAssetRefs(text, kind, resolve, rewrites, marked) {
       return uri ? `url("${uri}")` : whole;
     });
   if (kind === 'css') return urls(text);
-  return text
+  const written = text
     // React writes `srcSet` as it is spelled in JSX; HTML reads attribute
     // names in any case.
-    .replace(/\s(src|poster)="([^"]*)"/gi, (whole, attr, ref, at, all) => {
+    .replace(/\s(src|poster)="([^"]*)"/gi, (whole, attr, ref) => {
       const uri = resolve(ref);
-      return uri ? ` ${attr}="${uri}"${carry(attr, decodeAttr(ref), uri, at, all)}` : whole;
+      if (uri) carry(decodeAttr(ref), uri);
+      return uri ? ` ${attr}="${uri}"` : whole;
     })
-    .replace(/\s(srcset)="([^"]*)"/gi, (whole, attr, set, at, all) => {
-      const written = decodeAttr(set);
+    .replace(/\s(srcset)="([^"]*)"/gi, (whole, attr, set) => {
+      const value = decodeAttr(set);
       let carried = false;
-      const candidates = parseSrcset(written).map(({url, descriptor}) => {
+      const candidates = parseSrcset(value).map(({url, descriptor}) => {
         const uri = resolve(url);
         if (uri) carried = true;
         return {url: uri ?? url, descriptor};
       });
       if (!carried) return whole;
       const rewritten = formatSrcset(candidates);
-      return ` ${attr}="${rewritten.replace(/"/g, '&quot;')}"${carry(attr, written, rewritten, at, all)}`;
+      carry(value, rewritten);
+      return ` ${attr}="${rewritten.replace(/"/g, '&quot;')}"`;
     })
     .replace(/\sstyle="([^"]*)"/g, (whole, style) => {
       // The attribute holds escaped text: rewrite the CSS it means, then
       // escape it again, so a data: URI's quotes cannot end the attribute.
       const css = urls(decodeAttr(style), true);
       return ` style="${css.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`;
-    })
-    // An element with a carried `src` and `srcset` gets one attribute.
-    .replace(new RegExp(`<[^<>]*\\s${CARRY_ATTR}="[^"]*"[^<>]*\\s${CARRY_ATTR}="[^"]*"[^<>]*>`, 'g'), tag => {
-      const marks = [...tag.matchAll(new RegExp(`\\s${CARRY_ATTR}="([^"]*)"`, 'g'))].map(m => m[1]);
-      const kept = tag.replace(new RegExp(`\\s${CARRY_ATTR}="[^"]*"`, 'g'), '');
-      return kept.replace(/(\/?>)$/, ` ${CARRY_ATTR}="${marks.join(' ')}"$1`);
     });
+  return marked && rewrites && became.size > 0 ? withCarryMarks(written, became, rewrites, marked) : written;
+}
+
+/** The elements whose `src`, `srcset` or `poster` is an image the page shows. */
+const IMAGE_TAGS = new Set(['img', 'source', 'input', 'video']);
+
+/**
+ * The markup with each element a browser builds that shows a replaced value
+ * marked ({@link CARRY_ATTR}) with that value's number, once per element,
+ * after its last attribute. Only the first attribute of each name on a real
+ * `img`, `source`, `input` or `video` start tag counts, outside the ranges
+ * {@link unread} names; the pieces are the HTML scanner's own.
+ * @param {string} text
+ * @param {Map<string, string[]>} became what each value became, and the
+ *   values written that became it
+ * @param {Map<string, string>} rewrites
+ * @param {Map<string, number>} marked gets each marked value, with its number
+ * @returns {string}
+ */
+function withCarryMarks(text, became, rewrites, marked) {
+  const ranges = unread(text);
+  /** @type {Array<[number, string]>} */
+  const inserts = [];
+  for (const piece of scanHtml(text)) {
+    if (piece.kind !== 'start' || !IMAGE_TAGS.has(piece.tag) || piece.attrs.length === 0) continue;
+    if (ranges.some(([from, to]) => piece.start > from && piece.start < to)) continue;
+    /** @type {string[]} */
+    const marks = [];
+    const seen = new Set();
+    for (const [name, value] of piece.attrs) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      if (name !== 'src' && name !== 'srcset' && name !== 'poster') continue;
+      for (const was of became.get(decodeAttr(value)) ?? []) {
+        // The number stays the value's own, whatever later leaves the rewrites.
+        if (!marked.has(was)) marked.set(was, [...rewrites.keys()].indexOf(was));
+        marks.push(`${name}:${marked.get(was)}`);
+      }
+    }
+    if (marks.length > 0) inserts.push([/** @type {[number, number]} */ (piece.spans.at(-1))[1], ` ${CARRY_ATTR}="${[...new Set(marks)].join(' ')}"`]);
+  }
+  let out = '';
+  let at = 0;
+  for (const [where, mark] of inserts) {
+    out += text.slice(at, where) + mark;
+    at = where;
+  }
+  return out + text.slice(at);
 }
 
 /** A remote file whose address names a type that is never an image. */

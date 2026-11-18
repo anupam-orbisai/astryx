@@ -45,7 +45,6 @@ export const RAW_TEXT = new Set(['script', 'style', 'textarea', 'title', 'iframe
 
 const SPACE = /[\t\n\f\r ]/;
 const LETTER = /[a-zA-Z]/;
-const NAME_CHAR = /[\w:-]/;
 const DOCTYPE = /<!doctype/iy;
 
 /**
@@ -55,15 +54,15 @@ const DOCTYPE = /<!doctype/iy;
  * to the end of its value.
  * @param {string} html
  * @param {number} i the first letter of the name
- * @returns {{tag: string, attrs: Array<[string, string]>, spans: Array<[number, number]>, selfClosing: boolean, end: number} | 'text' | 'open'}
- *   'text' when the name is not a tag name, so the `<` is text; 'open' when
- *   no `>` ends the tag, so the rest of the document is text
+ * @returns {{tag: string, attrs: Array<[string, string]>, spans: Array<[number, number]>, selfClosing: boolean, end: number} | 'open'}
+ *   'open' when no `>` ends the tag, so the rest of the document is text
  */
 export function readTag(html, i) {
   const n = html.length;
   const nameStart = i;
-  while (i < n && NAME_CHAR.test(html[i])) i++;
-  if (i >= n || !(SPACE.test(html[i]) || html[i] === '/' || html[i] === '>')) return 'text';
+  // A browser reads a tag name up to white space, `/` or `>`.
+  while (i < n && !SPACE.test(html[i]) && html[i] !== '/' && html[i] !== '>') i++;
+  if (i >= n) return 'open';
   const tag = html.slice(nameStart, i).toLowerCase();
   /** @type {Array<[string, string]>} */
   const attrs = [];
@@ -174,8 +173,11 @@ export function* scanHtml(html) {
   const n = html.length;
   let at = 0;
   let text = 0;
-  // Inside <svg> or <math>, `<![CDATA[` opens a CDATA section to `]]>`.
-  let foreign = 0;
+  // Inside <svg> or <math>, `<![CDATA[` opens a CDATA section to `]]>`. An
+  // end tag closes only a root of its own name that is open, as the tree
+  // builder reads it: a stray `</svg>` in <math> stays in MathML.
+  /** @type {string[]} */
+  const foreign = [];
   while (at < n) {
     const lt = html.indexOf('<', at);
     if (lt < 0) break;
@@ -186,7 +188,7 @@ export function* scanHtml(html) {
     if (html.startsWith('<!--', lt)) {
       const close = html.indexOf('-->', lt + 2);
       token = {kind: 'comment', start: lt, end: close < 0 ? n : close + 3};
-    } else if (foreign > 0 && html.startsWith('<![CDATA[', lt)) {
+    } else if (foreign.length > 0 && html.startsWith('<![CDATA[', lt)) {
       const close = html.indexOf(']]>', lt + 9);
       token = {kind: 'cdata', start: lt, end: close < 0 ? n : close + 3};
     } else if (DOCTYPE.test(html)) {
@@ -200,11 +202,9 @@ export function* scanHtml(html) {
       const closing = next === '/';
       const read = readTag(html, lt + (closing ? 2 : 1));
       if (read === 'open') break;
-      if (read !== 'text') {
-        token = closing
-          ? {kind: 'end', tag: read.tag, start: lt, end: read.end}
-          : {kind: 'start', tag: read.tag, attrs: read.attrs, spans: read.spans, selfClosing: read.selfClosing, start: lt, end: read.end};
-      }
+      token = closing
+        ? {kind: 'end', tag: read.tag, start: lt, end: read.end}
+        : {kind: 'start', tag: read.tag, attrs: read.attrs, spans: read.spans, selfClosing: read.selfClosing, start: lt, end: read.end};
     }
     if (!token) {
       at = lt + 1;
@@ -214,8 +214,8 @@ export function* scanHtml(html) {
     yield token;
     at = text = token.end;
     if ((token.kind === 'start' || token.kind === 'end') && (token.tag === 'svg' || token.tag === 'math')) {
-      if (token.kind === 'end') foreign = Math.max(0, foreign - 1);
-      else if (!token.selfClosing) foreign++;
+      if (token.kind === 'start' && !token.selfClosing) foreign.push(token.tag);
+      else if (token.kind === 'end' && foreign.includes(token.tag)) foreign.length = foreign.lastIndexOf(token.tag);
     }
     if (token.kind === 'start' && token.tag === 'plaintext') {
       if (at < n) yield {kind: 'raw', start: at, end: n};
