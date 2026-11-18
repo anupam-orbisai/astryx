@@ -939,9 +939,45 @@ function inlineAssets(text, kind, ctx) {
 }
 
 /**
+ * A srcset's image candidates, split as HTML splits them: a URL runs to the
+ * next whitespace (a comma inside it, as in a data: URI, is part of it), and
+ * its descriptor runs to the next comma outside parentheses.
+ * @param {string} value
+ * @returns {Array<{url: string, descriptor: string}>}
+ */
+export function srcsetCandidates(value) {
+  /** @type {Array<{url: string, descriptor: string}>} */
+  const out = [];
+  let i = 0;
+  const n = value.length;
+  while (i < n) {
+    while (i < n && /[\s,]/.test(value[i])) i += 1;
+    if (i >= n) break;
+    let start = i;
+    while (i < n && !/\s/.test(value[i])) i += 1;
+    let url = value.slice(start, i);
+    let descriptor = '';
+    if (url.endsWith(',')) {
+      url = url.replace(/,+$/, '');
+    } else {
+      start = i;
+      let depth = 0;
+      while (i < n && !(value[i] === ',' && depth === 0)) {
+        if (value[i] === '(') depth += 1;
+        else if (value[i] === ')') depth = Math.max(0, depth - 1);
+        i += 1;
+      }
+      descriptor = value.slice(start, i).trim();
+    }
+    if (url) out.push({url, descriptor});
+  }
+  return out;
+}
+
+/**
  * Each reference a page's markup or stylesheet loads, read once for every
- * caller: the render inlines them, and the checks on a written file name the
- * remote ones. In markup: src, poster and srcset attributes, and url() in
+ * caller: the render inlines them, and the checks on a written file name
+ * every one it left. In markup: src, poster and srcset attributes, and url() in
  * style attributes; in a stylesheet: url(). `resolve` gets each reference as
  * written and returns what replaces it, or null to keep it.
  * @param {string} text
@@ -970,13 +1006,10 @@ export function rewriteRefs(text, kind, resolve, rewrites) {
       return uri ? ` ${attr}="${uri}"` : whole;
     })
     .replace(/\s(srcset)="([^"]*)"/gi, (whole, attr, set) => {
-      const parts = decodeAttr(set)
-        .split(',')
-        .map(part => {
-          const [ref, ...rest] = part.trim().split(/\s+/);
-          const uri = ref ? resolve(ref) : null;
-          return [uri ?? ref, ...rest].join(' ');
-        });
+      const parts = srcsetCandidates(decodeAttr(set)).map(({url, descriptor}) => {
+        const uri = resolve(url);
+        return [uri ?? url, descriptor].filter(Boolean).join(' ');
+      });
       const rewritten = parts.join(', ');
       if (rewritten !== decodeAttr(set)) rewrites?.set(decodeAttr(set), rewritten);
       return ` ${attr}="${rewritten.replace(/"/g, '&quot;')}"`;

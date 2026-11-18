@@ -1112,7 +1112,7 @@ describe('render(): every write stays inside the current folder', () => {
     expect(cli.status).toBe(0);
     expect(fs.existsSync(path.join(dir, 'styleattr/again.html'))).toBe(true);
     expect(cli.stdout).toMatch(/outside:\s+https:\/\/example\.com\/x\.png/);
-    expect(cli.stdout).toContain('loads https://example.com/x.png from outside the file when it opens, so it does not stand alone.');
+    expect(cli.stdout).toContain('loads 1 reference from outside the file when it opens (outside, above), so it does not stand alone.');
     expect(cli.stdout).not.toContain('Share this one file');
     // A file beside the page the render leaves for the browser is from outside
     // the file too, not from the network; a reference that loads nothing is
@@ -1121,8 +1121,17 @@ describe('render(): every write stays inside the current folder', () => {
     const rel = await runCli(['experimental', 'export', 'relref/page.tsx'], {cwd: dir});
     expect(rel.status).toBe(0);
     expect(rel.stdout).toMatch(/^outside:\s+\.\/bg\.png$/m);
-    expect(rel.stdout).toContain('loads ./bg.png from outside the file when it opens, so it does not stand alone.');
+    expect(rel.stdout).toContain('loads 1 reference from outside the file when it opens (outside, above), so it does not stand alone.');
     expect(rel.stdout).not.toContain('about:blank');
+  }, 60_000);
+
+  it('carries a srcset of local images as data: URIs, and the file still stands alone', async () => {
+    put('srcset/dot.png', PNG);
+    put('srcset/dot2.png', PNG);
+    put('srcset/page.tsx', 'export default function Page() { return (<main><h1>S</h1><img src="./dot.png" srcSet="./dot.png 1x, ./dot2.png 2x" alt="" /></main>); }\n');
+    const r = /** @type {any} */ (await render('srcset/page.tsx', {cwd: dir}));
+    expect(fs.readFileSync(path.join(dir, 'srcset/page.html'), 'utf8')).toMatch(/srcset="data:image\/png;base64,[^"]+ 1x, data:image\/png;base64,[^"]+ 2x"/i);
+    expect(r.data.checks.outside).toEqual([]);
   }, 60_000);
 
   it('names the element a style attribute sits on, caps the outside list in text, and prints an absolute output once', async () => {

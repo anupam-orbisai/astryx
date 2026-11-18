@@ -142,13 +142,13 @@ export function registerExperimentalExport(group, program) {
             : [record({outside: fileList(d.checks.outside)})]),
           record({
             exact: d.checks.roundTrip.exact
-              ? `yes: --reverse gives back all ${d.checks.roundTrip.files} carried files byte for byte`
+              ? `yes: --reverse gives back ${d.checks.roundTrip.files === 1 ? 'its 1 carried file' : `all ${d.checks.roundTrip.files} carried files`} byte for byte`
               : `no: ${d.checks.roundTrip.differs.join(', ')} differ${d.checks.roundTrip.differs.length === 1 ? 's' : ''} from the files on disk`,
           }),
           text(
             d.checks.outside.length === 0
               ? `Share this one file: ${shownAt(d.output, d.bytes)}. Nothing else needs to go with it.`
-              : `${shownAt(d.output, d.bytes)} loads ${fileList(d.checks.outside)} from outside the file when it opens, so it does not stand alone.`,
+              : `${shownAt(d.output, d.bytes)} loads ${d.checks.outside.length} reference${d.checks.outside.length === 1 ? '' : 's'} from outside the file when it opens (outside, above), so it does not stand alone.`,
           ),
           text(`Give it back: ${run} experimental export --reverse ${shellArg(d.output)}${restoreHere(d)}`),
         );

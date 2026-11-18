@@ -27,7 +27,9 @@ import {decode} from './html-reader.mjs';
  * `<a href>`, loads nothing. The page's own script is not read: what it
  * fetches is the page's behavior, not the file's.
  * @param {string} html
- * @returns {string[]} each reference once, in file order
+ * @returns {string[]} each reference once, in the order its readers find
+ *   them: the stylesheet, the markup's loading elements, then its src,
+ *   poster, srcset and style-attribute references
  */
 export function outsideRequests(html) {
   /** @type {Set<string>} */

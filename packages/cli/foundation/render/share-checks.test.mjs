@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {outsideRequests, roundTrip} from './share-checks.mjs';
 import {sourceBlock} from './source-block.mjs';
-import {embeddedLoads} from './render-page.mjs';
+import {embeddedLoads, srcsetCandidates} from './render-page.mjs';
 
 /** A written file: head styles, body markup, then its embedded source. @param {string} body @param {string} [style] */
 const file = (body, style = '') =>
@@ -110,6 +110,16 @@ describe('outsideRequests', () => {
     expect(
       outsideRequests(file('<img src="data:image/png;base64,AA"><a href="https://x.example">x</a>')),
     ).toEqual([]);
+  });
+});
+
+describe('srcsetCandidates', () => {
+  it('keeps a comma inside a URL, as in a data: URI, and splits candidates on the comma after a descriptor', () => {
+    expect(srcsetCandidates('data:image/png;base64,AAA= 1x, b.png 2x,c.png')).toEqual([
+      {url: 'data:image/png;base64,AAA=', descriptor: '1x'},
+      {url: 'b.png', descriptor: '2x'},
+      {url: 'c.png', descriptor: ''},
+    ]);
   });
 });
 
