@@ -1202,3 +1202,19 @@ export async function fontPackagesInstallLine(projectDir, families) {
     coversAll: known.every(Boolean),
   };
 }
+
+/**
+ * The file a bare package specifier resolves to from the project, as a
+ * bundler finds it (its `main`/`exports` entry), or `''` when it does not
+ * resolve.
+ * @param {string} projectDir
+ * @param {string} spec
+ * @returns {string}
+ */
+export function doctorResolvePackageEntry(projectDir, spec) {
+  try {
+    return createRequire(path.join(projectDir, 'noop.js')).resolve(spec);
+  } catch {
+    return '';
+  }
+}

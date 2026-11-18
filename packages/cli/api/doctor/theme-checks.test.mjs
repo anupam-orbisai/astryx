@@ -2359,6 +2359,42 @@ describe('app-theme doctor checks', () => {
     });
   });
 
+  it('reads a Less import option and a forward list as the module they name', async () => {
+    const css =
+      '[data-astryx-theme="ocean"] { --color-background-body: #101314; }\n';
+    const {dir} = await fixture([{slug: 'ocean', css}]);
+    writeRoot(dir);
+    write(path.join(dir, 'src/vars.less'), '@gap: 4px;\n');
+    write(path.join(dir, 'src/app.less'), "@import (reference) 'vars.less';\n");
+    write(path.join(dir, 'src/_tokens.scss'), '$a: 1;\n$b: 2;\n');
+    write(path.join(dir, 'src/index.scss'), "@forward 'tokens' hide a, $b;\n");
+    expect(check(await checkAppThemes(dir), 'theme-page-color')).toMatchObject({
+      status: 'warn',
+    });
+  });
+
+  it('stays silent on a package whose entry is a stylesheet', async () => {
+    const css =
+      '[data-astryx-theme="ocean"] { --color-background-body: #101314; }\n';
+    const {dir} = await fixture([{slug: 'ocean', css}]);
+    writeRoot(dir);
+    write(
+      path.join(dir, 'node_modules/@picocss/pico/package.json'),
+      '{"name": "@picocss/pico", "main": "css/pico.css"}\n',
+    );
+    write(
+      path.join(dir, 'node_modules/@picocss/pico/css/pico.css'),
+      'body { background: navy; }\n',
+    );
+    write(
+      path.join(dir, 'src/kit.ts'),
+      "import '@picocss/pico';\nexport {};\n",
+    );
+    expect(
+      (await checkAppThemes(dir)).some(c => c.id === 'theme-page-color'),
+    ).toBe(false);
+  });
+
   it('stays silent on a linked stylesheet the walk does not follow', async () => {
     const css =
       '[data-astryx-theme="ocean"] { --color-background-body: #101314; }\n';
@@ -2613,6 +2649,10 @@ describe('app-theme doctor checks', () => {
       ['src/app.sass', '@import bootstrap/scss/bootstrap\n'],
       ['src/app.styl', '@import nib\n'],
       ['src/app.scss', '@import url(https://cdn.example.com/kit.css);\n'],
+      [
+        'src/app.scss',
+        "@use 'sass:meta';\n.app { @include meta.load-css('some-kit/base'); }\n",
+      ],
       ['src/kit.ts', "import 'some-kit/dist/base.pcss';\nexport {};\n"],
       ['src/kit.ts', "import 'some-kit/dist/base.postcss';\nexport {};\n"],
     ]) {

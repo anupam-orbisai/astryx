@@ -36,6 +36,7 @@ import {
   realDoctorFile,
   isLocalThemeOwner,
   listDoctorThemePackages,
+  doctorResolvePackageEntry,
   walkProjectSourceFiles,
   listProjectSourceFiles,
   planThemeAppWrite,
@@ -2429,6 +2430,19 @@ function modulePageVerdict(source, themeStylesheets, where) {
   }
   for (const raw of specs) {
     const spec = String(raw).replace(/[?#].*$/u, '');
+    // (A package whose entry is a stylesheet, `@picocss/pico`: resolved
+    // from the project, as the bundler does.)
+    if (
+      !/^[./]/.test(spec) &&
+      !/^@astryxdesign\//.test(spec) &&
+      !/\.[a-z]+$/i.test(spec) &&
+      /\.(?:css|scss|sass|less|styl|pcss|postcss)$/.test(
+        doctorResolvePackageEntry(where.projectDir, spec),
+      )
+    ) {
+      verdicts.push('unknown');
+      continue;
+    }
     if (
       /\.(?:css|scss|sass|less|styl|pcss|postcss)$/.test(spec) &&
       (spec.startsWith('.')
@@ -2508,24 +2522,39 @@ function pageStyleUnread(source, ext, where) {
   if (/^\.(?:scss|sass|less|styl|pcss|postcss)$/u.test(ext)) {
     if (pageAndBackground.test(source) || /@apply\b/.test(source)) return true;
     const text = source.replace(/\/\*[\s\S]*?\*\/|(?<!:)\/\/[^\n]*/g, ' ');
-    // (Every item a load names: a comma list, quoted or not, a `url()`;
-    // Sass's own `sass:` modules load nothing.)
+    // (Every item a load names: a comma list, quoted or not, a `url()`,
+    // after a Less option (`(reference)`); `@use` and `@forward` name one
+    // module, before their `as`/`with`/`show`/`hide`; a
+    // `meta.load-css(…)` loads one more. Sass's own `sass:` modules load
+    // nothing.)
+    /** @param {string} item */
+    const specOf = item => {
+      const url = /^url\(\s*(['"]?)([^'")]*)\1\s*\)$/u.exec(item);
+      const quoted = /^(['"])([^'"]*)\1$/u.exec(item);
+      return url ? url[2] : quoted ? quoted[2] : item;
+    };
     /** @type {string[]} */
     const specs = [];
     for (const m of text.matchAll(
-      /@(?:use|forward|import|require)\s+([^;{}\n]+)/g,
-    ))
-      for (const raw of m[1].split(/,(?![^(]*\))/)) {
-        const item = raw
-          .trim()
-          .replace(/\s+(?:as|with|show|hide)\b[\s\S]*$/u, '')
-          .replace(/\s+(?:screen|print|all|only|not|and)\b[\s\S]*$/u, '')
-          .trim();
-        const url = /^url\(\s*(['"]?)([^'")]*)\1\s*\)$/u.exec(item);
-        const quoted = /^(['"])([^'"]*)\1$/u.exec(item);
-        const spec = url ? url[2] : quoted ? quoted[2] : item;
+      /@(use|forward|import|require)\s+([^;{}\n]+)/g,
+    )) {
+      const statement = m[2].replace(/^\([^)]*\)\s*/u, '').trim();
+      const items =
+        m[1] === 'use' || m[1] === 'forward'
+          ? [statement.replace(/\s+(?:as|with|show|hide)\b[\s\S]*$/u, '')]
+          : statement.split(/,(?![^(]*\))/);
+      for (const raw of items) {
+        const spec = specOf(
+          raw
+            .trim()
+            .replace(/\s+(?:screen|print|all|only|not|and)\b[\s\S]*$/u, '')
+            .trim(),
+        );
         if (spec && !/^sass:/u.test(spec)) specs.push(spec);
       }
+    }
+    for (const m of text.matchAll(/\bload-css\(\s*((['"])[^'"]*\2|[^,)\s]+)/g))
+      specs.push(specOf(m[1]));
     for (const spec of specs) {
       if (/^@astryxdesign\//.test(spec)) continue;
       if (
@@ -3194,6 +3223,8 @@ function oneModePageCheck(
       mayPaint = true;
       continue;
     }
+    // (A preprocessor stylesheet read above is no module.)
+    if (/^\.(?:scss|sass|less|styl|pcss|postcss)$/u.test(ext)) continue;
     if (/^\.html?$/u.test(ext)) {
       if (
         stylesheetLinkHrefs(source).some(
