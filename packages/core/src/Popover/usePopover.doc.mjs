@@ -102,7 +102,7 @@ export const docs = {
       name: 'isModal',
       type: 'boolean',
       description:
-        'Whether a dialog-role popover is modal (aria-modal). Only applies when role is "dialog".',
+        'Whether the popover is modal. true holds Tab inside the open popover and marks a dialog popover aria-modal. false holds nothing: Tab follows the page order, with the popover after its trigger (or a focusable anchor when there is no trigger) where the browser supports popover invokers, and Escape closes it only while focus is inside it, or on or inside its anchor or trigger. A Tab pressed outside is never pulled in.',
       default: 'true',
     },
     {
@@ -184,7 +184,7 @@ export const docs = {
   ],
   usage: {
     description:
-      'Headless hook for click-triggered popovers with focus trapping. Combines useLayer with useFocusTrap, auto-focus, light dismiss, Escape handling, and an optional hidden close button for accessible dialog-like popover behavior. Every painted surface emits the canonical popover target. A custom composition needing a distinct stable seam should pass and document its own surfaceTarget.',
+      'Headless hook for click-triggered popovers with focus containment for modal popovers. Combines useLayer with useFocusTrap, auto-focus, light dismiss, Escape handling, and an optional hidden close button for accessible dialog-like popover behavior. Every painted surface emits the canonical popover target. A custom composition needing a distinct stable seam should pass and document its own surfaceTarget.',
     bestPractices: [
       {
         guidance: true,
@@ -226,7 +226,7 @@ export const docs = {
 /** @type {import('@astryxdesign/cli/authoring').HookTranslationDoc} */
 export const docsDense = {
   description:
-    'Headless click-triggered popovers w/ focus trap, auto-focus, light dismiss, Escape, optional hidden close button. Every surface emits the canonical popover target. Custom compositions needing a distinct seam pass/document an owned surfaceTarget.',
+    'Headless click-triggered popovers w/ modal focus trap, auto-focus, light dismiss, Escape, optional hidden close button. Every surface emits the canonical popover target. Custom compositions needing a distinct seam pass/document an owned surfaceTarget.',
   paramDescriptions: {
     anchor:
       'element popover sits on when not the trigger: ref (read each render) or function (read on open and when a new one is passed); no trigger ARIA on it.',
@@ -247,7 +247,8 @@ export const docsDense = {
     closeButtonLabel: 'label for hidden close button.',
     dialogLabel: 'accessible label for popover dialog (role="dialog" only).',
     role: 'content wrapper ARIA role; "none" for listbox/menu popups.',
-    isModal: 'whether a dialog-role popover is modal (aria-modal).',
+    isModal:
+      'true: Tab held inside + aria-modal; false: page Tab order, Escape only while focus in popover/anchor/trigger.',
     hasSurface: 'apply default surface background/radius/shadow.',
     padding: 'spacing-scale padding on the painted surface; omit for none.',
     surfaceTarget:
@@ -267,7 +268,7 @@ export const docsDense = {
   },
   usage: {
     description:
-      'Headless click-triggered popovers w/ focus trap, auto-focus, light dismiss, Escape, optional hidden close button. Every surface emits the canonical popover target. Custom compositions needing a distinct seam pass/document an owned surfaceTarget.',
+      'Headless click-triggered popovers w/ modal focus trap, auto-focus, light dismiss, Escape, optional hidden close button. Every surface emits the canonical popover target. Custom compositions needing a distinct seam pass/document an owned surfaceTarget.',
     bestPractices: [
       {
         guidance: true,

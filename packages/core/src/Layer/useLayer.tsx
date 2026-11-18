@@ -552,6 +552,12 @@ interface InternalContextLayerOptions extends ContextLayerOptions {
    * hidden style commits, so the owner can move focus out first.
    */
   onAnchorHidden?: () => void;
+  /**
+   * The element whose place in the sequential focus order the open layer
+   * takes, passed to `showPopover({source})`. Defaults to the trigger. Return
+   * null for a layer that takes its own DOM place.
+   */
+  getInvoker?: () => HTMLElement | null;
 }
 
 function toCssLength(value: number | string): string {
@@ -1336,6 +1342,9 @@ function useLayerImplementation(
   const onAnchorHiddenRef = useCommittedRef(
     mode === 'context' ? options.onAnchorHidden : undefined,
   );
+  const getInvokerRef = useCommittedRef(
+    mode === 'context' ? options.getInvoker : undefined,
+  );
   const id = useId();
   const anchorId = `--astryx-layer-${id.replace(/:/g, '')}`;
 
@@ -1481,54 +1490,61 @@ function useLayerImplementation(
    * refusal outside such a hide, reaches the caller: a replay runs outside
    * the hide, so one that fails is not caught here.
    */
-  const showPopoverElement = useCallback((popover: HTMLElement): boolean => {
-    // Finding infra-4: the Popover API is unsupported on Safari <17 and
-    // Firefox <125. On those browsers `showPopover` does not exist, so fall
-    // back to plain visibility instead of throwing.
-    if (typeof popover.showPopover === 'function') {
-      const doc = popover.ownerDocument;
-      const duringBrowserHide = isBrowserHideInFlight(doc);
-      try {
-        runPopoverOperation(doc, () => {
-          // The trigger is passed as the popover's invoker `source`: a layer
-          // hosted away from its trigger then still takes its sequential
-          // focus order (and its popover nesting) from the trigger rather
-          // than from its own DOM position. Browsers without the option
-          // ignore it. `source` is declared as an `HTMLElement`. A
-          // caller-rendered icon trigger is an `SVGElement`, whose dictionary
-          // conversion throws before the popover opens. Omitting the option
-          // for it still anchors the layer, because positioning reads the
-          // anchor-name pair, and only gives up the invoker's focus order.
-          // The check asks the trigger's own window: an HTML trigger rendered
-          // into another document (an iframe, a Picture-in-Picture window) is
-          // not an instance of this window's `HTMLElement`, and keeps its
-          // source.
-          const trigger = triggerRef.current;
-          const triggerView = trigger?.ownerDocument.defaultView;
-          popover.showPopover({
-            source:
-              triggerView != null && trigger instanceof triggerView.HTMLElement
-                ? trigger
-                : undefined,
+  const showPopoverElement = useCallback(
+    (popover: HTMLElement): boolean => {
+      // Finding infra-4: the Popover API is unsupported on Safari <17 and
+      // Firefox <125. On those browsers `showPopover` does not exist, so fall
+      // back to plain visibility instead of throwing.
+      if (typeof popover.showPopover === 'function') {
+        const doc = popover.ownerDocument;
+        const duringBrowserHide = isBrowserHideInFlight(doc);
+        try {
+          runPopoverOperation(doc, () => {
+            // The trigger is passed as the popover's invoker `source`: a layer
+            // hosted away from its trigger then still takes its sequential
+            // focus order (and its popover nesting) from the trigger rather
+            // than from its own DOM position. Browsers without the option
+            // ignore it. `source` is declared as an `HTMLElement`. A
+            // caller-rendered icon trigger is an `SVGElement`, whose dictionary
+            // conversion throws before the popover opens. Omitting the option
+            // for it still anchors the layer, because positioning reads the
+            // anchor-name pair, and only gives up the invoker's focus order.
+            // The check asks the trigger's own window: an HTML trigger rendered
+            // into another document (an iframe, a Picture-in-Picture window) is
+            // not an instance of this window's `HTMLElement`, and keeps its
+            // source.
+            const trigger =
+              getInvokerRef.current != null
+                ? getInvokerRef.current()
+                : triggerRef.current;
+            const triggerView = trigger?.ownerDocument.defaultView;
+            popover.showPopover({
+              source:
+                triggerView != null &&
+                trigger instanceof triggerView.HTMLElement
+                  ? trigger
+                  : undefined,
+            });
           });
-        });
-      } catch (error) {
-        // The name, not the constructor: a popover in another document throws
-        // that document's `DOMException`.
-        if (
-          duringBrowserHide &&
-          (error as {name?: unknown} | null)?.name === 'InvalidStateError'
-        ) {
-          return false;
+        } catch (error) {
+          // The name, not the constructor: a popover in another document throws
+          // that document's `DOMException`.
+          if (
+            duringBrowserHide &&
+            (error as {name?: unknown} | null)?.name === 'InvalidStateError'
+          ) {
+            return false;
+          }
+          throw error;
         }
-        throw error;
+      } else {
+        popover.style.display = 'block';
       }
-    } else {
-      popover.style.display = 'block';
-    }
-    openedPopoverRef.current = popover;
-    return true;
-  }, []);
+      openedPopoverRef.current = popover;
+      return true;
+    },
+    [getInvokerRef],
+  );
 
   const isCurrentContextPopover = useCallback(
     (popover: HTMLElement): boolean => {

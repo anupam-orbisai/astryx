@@ -251,10 +251,6 @@ this record's current membership snapshot must be updated with it.
   layer returns it, or else on the host itself. The rule is the same for a
   mouse, a pen, and a finger.
 
-FR2 and FR3 gap: Escape and platform close requests reach a non-modal Popover through
-the shared stack and native auto light dismiss wherever focus is
-(`spec:AST-116` FR15 gap).
-
 ## Allowed component variation
 
 - **AV1 — Focus.** Members own focus entry, containment, movement, and the

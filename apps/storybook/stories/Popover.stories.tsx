@@ -366,6 +366,54 @@ function ResizablePanel() {
 }
 
 /**
+ * A non-modal Popover between two page controls. Tab moves from the trigger
+ * into the popover and on to the control after the trigger, and Escape
+ * closes it only while focus is inside it or on its trigger.
+ */
+function NonModalTip({
+  presentation,
+}: {
+  presentation?: 'popover' | 'bottom-sheet';
+}) {
+  return (
+    <HStack gap={3}>
+      <Button label="Before">Before</Button>
+      <Popover
+        label="Tip"
+        isModal={false}
+        presentation={presentation}
+        placement="below"
+        width={240}
+        content={
+          <VStack gap={2}>
+            <Text type="body">Filters narrow the list.</Text>
+            <HStack gap={2}>
+              <Button label="Got it">Got it</Button>
+              <Button label="Learn more" variant="ghost">
+                Learn more
+              </Button>
+            </HStack>
+          </VStack>
+        }>
+        <Button label="Show tip">Show tip</Button>
+      </Popover>
+      <Button label="After">After</Button>
+    </HStack>
+  );
+}
+
+export const NonModal: Story = {
+  tags: ['!autodocs'],
+  render: () => <NonModalTip />,
+};
+
+export const NonModalSheet: Story = {
+  tags: ['!autodocs'],
+  parameters: {layout: 'fullscreen'},
+  render: () => <NonModalTip presentation="bottom-sheet" />,
+};
+
+/**
  * An open Popover above page controls that take a finger's drag: a resize
  * handle and rows with swipe actions. On a touch screen each follows the
  * finger while the Popover is open.

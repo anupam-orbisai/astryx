@@ -130,7 +130,10 @@ import {
 
 export type {BottomSheetHeight, BottomSheetSnapPoint} from './BottomSheetPanel';
 import type {BottomSheetHeight, BottomSheetSnapPoint} from './BottomSheetPanel';
-import {BottomSheetEscapeContext} from './bottomSheetEscape';
+import {
+  BottomSheetEscapeContext,
+  BottomSheetEscapeScopeContext,
+} from './bottomSheetEscape';
 import {layerClickBoundary} from '../Layer/layerClickBoundary';
 
 const styles = stylex.create({
@@ -526,6 +529,7 @@ function StandaloneBottomSheet({
 
   // Popover's sheet may turn Escape off on its own (bottomSheetEscape.ts).
   const isEscapeAllowed = use(BottomSheetEscapeContext);
+  const isEscapeInScope = use(BottomSheetEscapeScopeContext);
   const dismissOnEscape = useCallback(() => {
     if (isOpen && purpose !== 'required' && isEscapeAllowed) {
       onOpenChange(false);
@@ -835,7 +839,8 @@ function StandaloneBottomSheet({
     isPresent: () =>
       isSheetHostPresented(dialogRef.current) &&
       !stackViewRef.current.isCovered &&
-      stackViewRef.current.replacedMotion == null,
+      stackViewRef.current.replacedMotion == null &&
+      (isEscapeInScope == null || isEscapeInScope()),
   });
 
   // The native `cancel` event is a close request the stack never saw a press

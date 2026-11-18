@@ -6,7 +6,8 @@
  * @file bottomSheetEscape.ts
  * @input React context
  * @output BottomSheetEscapeContext: whether Escape (and the platform's close
- *   request) may dismiss the standalone sheet below it
+ *   request) may dismiss the standalone sheet below it;
+ *   BottomSheetEscapeScopeContext: when that sheet takes them
  * @position Internal to Core, not exported from the package: Popover's sheet
  *   presentation passes `hasEscapeDismiss` through it, so its sheet can
  *   light-dismiss (scrim tap, swipe down) while Escape stays off. A
@@ -23,3 +24,13 @@ export const BottomSheetEscapeContext = createSharedContext(
   true,
 );
 BottomSheetEscapeContext.displayName = 'BottomSheetEscapeContext';
+
+/**
+ * Whether the sheet below takes Escape and the platform's close request now.
+ * A non-modal Popover sheet takes them only while focus is in its scope; null
+ * (the default) means always.
+ */
+export const BottomSheetEscapeScopeContext = createSharedContext<
+  (() => boolean) | null
+>('BottomSheetEscapeScopeContext', 1, null);
+BottomSheetEscapeScopeContext.displayName = 'BottomSheetEscapeScopeContext';

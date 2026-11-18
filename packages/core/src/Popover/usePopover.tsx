@@ -28,8 +28,11 @@ import React, {
 import * as stylex from '@stylexjs/stylex';
 import {useLayerInternal, type ContextRenderProps} from '../Layer/useLayer';
 import {watchOutsidePans} from '../Layer/outsidePanClaim';
+import {currentInputTarget} from '../Layer/gestureCounter';
 import {useIsomorphicLayoutEffect} from '../hooks/useIsomorphicLayoutEffect';
 import {resolvePopoverAnchor, type PopoverAnchor} from './popoverAnchor';
+import {announceMessage} from '../hooks/useAnnounce';
+import {focusableWithin} from '../utils/focusReturn';
 import {useFocusTrapInternal} from '../hooks/useFocusTrap';
 import {useCommittedRef, useCommittedRefInto} from '../hooks/useCommittedRef';
 import {useOutsidePress} from '../Layer/outsidePress';
@@ -313,9 +316,18 @@ export interface UsePopoverOptions {
   role?: 'dialog' | 'none';
 
   /**
-   * Whether the dialog is modal (`aria-modal`). Only applies when `role` is
-   * `'dialog'`. Set to `false` for non-modal dialogs that do not inert the rest
-   * of the page.
+   * Whether the popover is modal.
+   *
+   * - `true`: Tab and Shift+Tab cycle inside the open popover, and a dialog
+   *   popover carries `aria-modal`.
+   * - `false`: the popover holds nothing. Tab moves in the page's order: the
+   *   popover takes its place after the trigger (after a focusable anchor
+   *   when there is no trigger) where the browser supports popover invokers.
+   *   Escape closes it only while focus is inside it, or on or inside its
+   *   anchor or trigger. Use it for a coachmark or a tour step, whose reader
+   *   must reach the control it describes.
+   *
+   * A Tab pressed outside the popover is never pulled into it.
    *
    * @default true
    */
@@ -500,7 +512,7 @@ export interface InternalPopoverOptions extends UsePopoverOptions {
 }
 
 /**
- * Hook for creating popover dialogs with focus trapping.
+ * Hook for creating popover dialogs, with focus containment when modal.
  *
  * Combines:
  * - `useLayer` for popover positioning using CSS anchor positioning
@@ -541,7 +553,7 @@ export interface InternalPopoverOptions extends UsePopoverOptions {
  */
 function usePopoverImplementation(
   options: InternalPopoverOptions = {},
-): UsePopoverReturn {
+): UsePopoverInternalReturn {
   const {
     anchor,
     anchorOutOfViewBehavior = 'stay',
@@ -619,12 +631,41 @@ function usePopoverImplementation(
     onHide?.();
   }, [outsidePress, onHide]);
   // A caller that may cancel an outside dismissal gets the outside-press
-  // watch in place of native light dismiss, which no script can cancel. The
-  // choice holds while the popover is open: changing it changes the layer's
-  // popover mode, which would close it.
-  const wantsOutsidePress = hasLightDismiss && onOutsidePress != null;
+  // watch in place of native light dismiss, which no script can cancel. A
+  // non-modal popover takes Escape only within its scope, so it leaves the
+  // browser's auto light dismiss (which closes on any Escape) to this watch.
+  // The choice holds while the popover is open: changing it changes the
+  // layer's popover mode, which would close it.
+  const wantsOutsidePress =
+    hasLightDismiss && (onOutsidePress != null || !isModal);
   const [watchesOutsidePress, setWatchesOutsidePress] =
     useState(wantsOutsidePress);
+  // A non-modal popover takes Escape only while it holds focus: inside it, or
+  // on the anchor or trigger it belongs to. Read at press time.
+  const surfaceHolderRef =
+    useRef<React.RefObject<HTMLDivElement | null> | null>(null);
+  // `surfaceElement` names the surface when it is not the anchored one
+  // (Popover's sheet).
+  const isFocusInNonModalScope = useCallback(
+    (surfaceElement?: Element | null): boolean => {
+      const surface =
+        surfaceElement ?? surfaceHolderRef.current?.current ?? null;
+      const doc = surface?.ownerDocument ?? document;
+      const active = doc.activeElement;
+      if (active == null) {
+        return false;
+      }
+      const anchor = boundAnchorRef.current;
+      const trigger = triggerElementRef.current;
+      return (
+        surface?.contains(active) === true ||
+        anchor?.contains(active) === true ||
+        trigger?.contains(active) === true
+      );
+    },
+    [],
+  );
+
   // Focus returns as the popover starts to close, while it still holds focus:
   // the browser restores focus only for an auto popover whose opener is still
   // there, and then with a focus ring whatever the last input was. The trap
@@ -636,6 +677,23 @@ function usePopoverImplementation(
     returnFocusRef.current();
     onCloseStartRef.current?.();
   }, [onCloseStartRef]);
+  // The open popover takes its place in the focus order after its trigger,
+  // or after its anchor when there is no trigger and the anchor takes focus;
+  // otherwise its own DOM place. A trigger that wraps its control (Popover's
+  // anchor wrapper) passes the control: the order follows the element that
+  // takes focus.
+  const getInvoker = useCallback((): HTMLElement | null => {
+    const trigger = triggerElementRef.current;
+    if (trigger != null) {
+      return focusableWithin(trigger) ?? trigger;
+    }
+    const anchorElement =
+      anchorOptionRef.current == null ? null : boundAnchorRef.current;
+    return isHTMLElement(anchorElement) && anchorElement.tabIndex >= 0
+      ? anchorElement
+      : null;
+  }, [anchorOptionRef]);
+  const announcesOpenRef = useRef(false);
   const layer = useLayerInternal({
     mode: 'context',
     lightDismiss: hasLightDismiss && !watchesOutsidePress,
@@ -649,6 +707,7 @@ function usePopoverImplementation(
     waitsForAnchor: anchor != null,
     hidesWithAnchor: anchorOutOfViewBehavior === 'hideWhileOutOfView',
     onAnchorHidden: handleAnchorHidden,
+    getInvoker,
   });
 
   // Focus trap for the popover content. Escape stays registered while light
@@ -675,7 +734,10 @@ function usePopoverImplementation(
     getAnchor: () =>
       anchorOptionRef.current == null ? null : boundAnchorRef.current,
     layerId: layer.id,
+    isContaining: isModal,
+    isEscapeInScope: isModal ? undefined : () => isFocusInNonModalScope(),
   });
+  useCommittedRefInto(surfaceHolderRef, contentRef);
   useCommittedRefInto(returnFocusRef, returnFocus);
 
   const focusInitialTarget = useCallback(() => {
@@ -699,6 +761,34 @@ function usePopoverImplementation(
     }
     focusFirst();
   }, [contentRef, focusFirst, role]);
+
+  // A dialog popover that opens from code and takes no focus announces
+  // its name, so a screen reader user learns it appeared. It reads focus
+  // after initial focus has had its frame.
+  const isOpenForAnnouncement = layer.isOpen;
+  useEffect(() => {
+    if (!isOpenForAnnouncement || !announcesOpenRef.current) {
+      return;
+    }
+    announcesOpenRef.current = false;
+    const container = contentRef.current;
+    const view = container?.ownerDocument.defaultView ?? window;
+    // Initial focus for content that mounts on open lands in the next frame,
+    // so focus is read one frame after that.
+    let frame = view.requestAnimationFrame(() => {
+      frame = view.requestAnimationFrame(() => {
+        const active = container?.ownerDocument.activeElement ?? null;
+        if (
+          dialogLabel != null &&
+          container != null &&
+          (active == null || !container.contains(active))
+        ) {
+          announceMessage(dialogLabel, 'polite');
+        }
+      });
+    });
+    return () => view.cancelAnimationFrame(frame);
+  }, [isOpenForAnnouncement, contentRef, dialogLabel]);
 
   // Auto-focus first element when popover opens (unless skipped)
   useEffect(() => {
@@ -896,11 +986,21 @@ function usePopoverImplementation(
       // that renders on open (and the dialog-surface fallback) waits for the
       // effect's frame.
       focusOnShowRef.current = focusWithinEvent;
+      const trigger = triggerElementRef.current;
+      // An open while a press, key or click on the trigger is being handled
+      // is the person's; any other open is from code.
+      const inputTarget = currentInputTarget();
+      const isFromTrigger =
+        trigger != null &&
+        isElement(inputTarget) &&
+        trigger.contains(inputTarget);
+      announcesOpenRef.current =
+        role === 'dialog' && dialogLabel != null && !isFromTrigger;
       // The first frame is anchored: the anchor is read as the popover opens.
       bindAnchor();
       layer.show();
     },
-    [layer, hasAutoFocus, contentRef, bindAnchor],
+    [layer, hasAutoFocus, contentRef, bindAnchor, role, dialogLabel],
   );
 
   // Toggle function. Opening delegates to show so every route inherits the
@@ -1021,11 +1121,26 @@ function usePopoverImplementation(
     id: layer.id,
     render,
     triggerProps,
+    isFocusInScope: isFocusInNonModalScope,
   };
 }
 
+/**
+ * @internal What Popover reads beyond the public return.
+ */
+export interface UsePopoverInternalReturn extends UsePopoverReturn {
+  /**
+   * Whether focus is in the popover's Escape scope: inside its surface (or
+   * `surface`, when another element holds the content), or on or inside its
+   * anchor or trigger.
+   */
+  isFocusInScope: (surface?: Element | null) => boolean;
+}
+
 export function usePopover(options: UsePopoverOptions = {}): UsePopoverReturn {
-  return usePopoverImplementation(options);
+  const {isFocusInScope: _isFocusInScope, ...popover} =
+    usePopoverImplementation(options);
+  return popover;
 }
 
 /**
@@ -1033,6 +1148,6 @@ export function usePopover(options: UsePopoverOptions = {}): UsePopoverReturn {
  */
 export function usePopoverInternal(
   options: InternalPopoverOptions = {},
-): UsePopoverReturn {
+): UsePopoverInternalReturn {
   return usePopoverImplementation(options);
 }

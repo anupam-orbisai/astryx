@@ -60,6 +60,7 @@ import {devWarn} from '../utils/devWarning';
 import {matchesMediaQuery, watchMediaQuery} from '../utils/coarsePointer';
 import type {BaseProps} from '../BaseProps';
 import {FALLBACK_CLOSE_SELECTOR, usePopoverInternal} from './usePopover';
+import {isDialogShown} from '../utils/nodeType';
 import {usePresentationHold} from '../Layer/presentationHold';
 import {usePopoverSurfaceMotion} from './PopoverTouch';
 import {
@@ -74,7 +75,10 @@ import {clampInlineSize, isIntrinsicInlineSize} from '../Layer/clampInlineSize';
 import {spacingVars} from '../theme/tokens.stylex';
 import {InteractiveRoleContext} from '../InteractiveRoleContext/InteractiveRoleContext';
 import type {SpacingStep} from '../utils/types';
-import {BottomSheetEscapeContext} from '../BottomSheet/bottomSheetEscape';
+import {
+  BottomSheetEscapeContext,
+  BottomSheetEscapeScopeContext,
+} from '../BottomSheet/bottomSheetEscape';
 import {
   PopoverBottomSheet,
   preloadPopoverBottomSheet,
@@ -310,8 +314,13 @@ export interface PopoverProps extends Pick<
   role?: 'dialog' | 'none';
 
   /**
-   * Whether a dialog-style popover is modal (`aria-modal`). Only applies when
-   * `role` is `'dialog'`.
+   * Whether the popover is modal. `true` holds Tab inside the open popover
+   * and marks a dialog popover `aria-modal`. `false` holds nothing: Tab moves
+   * in the page's order, with the popover after its trigger where the browser
+   * supports popover invokers, and Escape closes it only while focus is inside
+   * it or on its trigger. Use `false` for a coachmark. As
+   * a sheet (`presentation`), `false` presents a sheet with no scrim that
+   * leaves the page interactive.
    *
    * @default true
    */
@@ -368,14 +377,16 @@ export interface PopoverProps extends Pick<
    * either orientation) and the anchored popover elsewhere, which is what iOS
    * does with a popover by default.
    *
-   * In a sheet, `placement`, `alignment`, `width`, `role`, `isModal` and
-   * `hasAutoFocus` do not apply (the sheet is a modal dialog with its own
-   * focus handling); `xstyle`, `className` and `style` style the sheet's
-   * panel, as they style the anchored surface; `padding` insets the
-   * sheet's content. The sheet always light-dismisses (a tap outside it or a
-   * swipe down closes it, whatever `hasLightDismiss` says), Escape follows
-   * `hasEscapeDismiss`, and the fallback close stays hidden as on the
-   * anchored surface. The surface is
+   * In a sheet, `placement`, `alignment`, `width`, `role` and
+   * `hasAutoFocus` do not apply (the sheet has its own focus handling);
+   * `xstyle`, `className` and `style` style the sheet's panel, as they style
+   * the anchored surface; `padding` insets the sheet's content. A modal sheet
+   * always light-dismisses (a tap outside it or a swipe down closes it,
+   * whatever `hasLightDismiss` says). A sheet with `isModal={false}` has no
+   * scrim: a swipe down closes it, and a tap on the page does not. Escape
+   * follows `hasEscapeDismiss`, and on a non-modal sheet applies only while
+   * focus is in the sheet or on its trigger. The fallback close stays hidden
+   * as on the anchored surface. The surface is
    * chosen when the popover opens and kept until it closes.
    * @default 'popover'
    */
@@ -493,7 +504,7 @@ function windowOf(element: Element | null): Window & typeof globalThis {
  * Uses an inline-flex wrapper as the CSS anchor for stable positioning
  * (immune to pressed-state transforms like `:active { scale(0.98) }`).
  *
- * Focus is trapped inside the popover when open.
+ * Focus is held inside the open popover unless `isModal` is `false`.
  * Supports light dismiss by default (click outside or Escape to close).
  *
  * For hover-triggered overlays, use {@link HoverCard} instead.
@@ -673,7 +684,7 @@ export function Popover({
         return;
       }
       const dialog = sheetPanel.closest('dialog');
-      if (dialog == null || !dialog.open) {
+      if (dialog == null || !isDialogShown(dialog)) {
         return;
       }
       const active = sheetPanel.ownerDocument.activeElement;
@@ -725,14 +736,28 @@ export function Popover({
       return;
     }
     const dialog = sheetPanelRef.current?.closest('dialog');
-    if (dialog == null || !dialog.open) {
+    if (dialog == null || !isDialogShown(dialog)) {
       // The sheet's <dialog> is already closed, so its close event has fired
       // and its exit is over: unmount it.
       releaseSheet();
       return;
     }
-    dialog.addEventListener('close', releaseSheet);
-    return () => dialog.removeEventListener('close', releaseSheet);
+    // A modal sheet's <dialog> fires `close`. A non-modal sheet is shown as a
+    // popover, which never sets `open`, and fires `toggle` as it hides.
+    const releaseOnHide = (event: Event) => {
+      if (
+        event.type === 'close' ||
+        (event as ToggleEvent).newState === 'closed'
+      ) {
+        releaseSheet();
+      }
+    };
+    dialog.addEventListener('close', releaseOnHide);
+    dialog.addEventListener('toggle', releaseOnHide);
+    return () => {
+      dialog.removeEventListener('close', releaseOnHide);
+      dialog.removeEventListener('toggle', releaseOnHide);
+    };
   }, [hasSheetBeenOpen, isSheetOpen, releaseSheet]);
   // An open on a compact touch screen shows the sheet at once: its module
   // loads as soon as the sheet can be the surface, with nothing rendered.
@@ -743,6 +768,14 @@ export function Popover({
   }, [resolvedPresentation]);
   const isAnySurfaceOpen = popover.isOpen || isSheetOpen;
   const sheetId = `${popover.id}-sheet`;
+  // A non-modal sheet takes Escape only while focus is in it, or on or
+  // inside the anchor or trigger, by the same check as the anchored surface.
+  const {isFocusInScope} = popover;
+  const isFocusInSheetScope = useCallback(
+    (): boolean =>
+      isFocusInScope(sheetPanelRef.current?.closest('dialog') ?? null),
+    [isFocusInScope],
+  );
 
   const setSheetOpen = useCallback(
     (next: boolean) => {
@@ -1067,37 +1100,45 @@ export function Popover({
       {isContentInSheet ? null : content}
     </div>
   );
-  // The sheet renders while it is the open surface and through its exit. It
-  // always light-dismisses: a tap outside it or a swipe down closes it,
-  // whatever `hasLightDismiss` says, so a finger always has a way out
-  // (DEC-8). Escape follows `hasEscapeDismiss`, and the fallback close stays
-  // hidden until it is reached, as on the anchored surface.
+  // The sheet renders while it is the open surface and through its exit. A
+  // modal sheet always light-dismisses: a tap outside it or a swipe down
+  // closes it, whatever `hasLightDismiss` says, so a finger always has a way
+  // out. A non-modal sheet has no scrim to tap; a swipe down closes it, and
+  // Escape applies only while focus is in the sheet or on its trigger.
+  // Escape follows `hasEscapeDismiss`, and the fallback close stays hidden
+  // until it is reached, as on the anchored surface.
   const sheet = isSheetMounted ? (
-    <BottomSheetEscapeContext value={hasEscapeDismiss}>
-      <PopoverBottomSheet
-        ref={attachSheetPanel}
-        id={sheetId}
-        isOpen={isSheetOpen}
-        onOpenChange={setSheetOpen}
-        label={label ?? triggerText}
-        height="tall"
-        padding={padding}
-        xstyle={xstyle}
-        className={className}
-        style={style}
-        data-testid={isContentInSheet ? testId : undefined}>
-        {isContentInSheet ? content : null}
-        {isContentInSheet && hasCloseButton !== false ? (
-          <Button
-            data-astryx-popover-fallback-close=""
-            variant="secondary"
-            label={closeButtonLabel ?? t('@astryx.popover.close')}
-            onClick={() => setSheetOpen(false)}
-            xstyle={styles.sheetFallbackClose}
-          />
-        ) : null}
-      </PopoverBottomSheet>
-    </BottomSheetEscapeContext>
+    <BottomSheetEscapeScopeContext
+      value={isModal === false ? isFocusInSheetScope : null}>
+      <BottomSheetEscapeContext value={hasEscapeDismiss}>
+        <PopoverBottomSheet
+          ref={attachSheetPanel}
+          id={sheetId}
+          isOpen={isSheetOpen}
+          onOpenChange={setSheetOpen}
+          // A non-modal popover stays non-modal as a sheet: no scrim, the page
+          // stays interactive, and focus is not held.
+          hasScrim={isModal !== false}
+          label={label ?? triggerText}
+          height="tall"
+          padding={padding}
+          xstyle={xstyle}
+          className={className}
+          style={style}
+          data-testid={isContentInSheet ? testId : undefined}>
+          {isContentInSheet ? content : null}
+          {isContentInSheet && hasCloseButton !== false ? (
+            <Button
+              data-astryx-popover-fallback-close=""
+              variant="secondary"
+              label={closeButtonLabel ?? t('@astryx.popover.close')}
+              onClick={() => setSheetOpen(false)}
+              xstyle={styles.sheetFallbackClose}
+            />
+          ) : null}
+        </PopoverBottomSheet>
+      </BottomSheetEscapeContext>
+    </BottomSheetEscapeScopeContext>
   ) : null;
 
   // The anchored layer, unless the sheet is the presentation that is mounted.

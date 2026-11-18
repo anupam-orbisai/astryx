@@ -29,7 +29,10 @@ import {
   type ReactNode,
 } from 'react';
 import {BottomSheet} from './BottomSheet';
-import {BottomSheetEscapeContext} from './bottomSheetEscape';
+import {
+  BottomSheetEscapeContext,
+  BottomSheetEscapeScopeContext,
+} from './bottomSheetEscape';
 import {resetBottomSheetStackForTests} from './bottomSheetStack';
 import {BottomSheetSwitcher} from './BottomSheetSwitcher';
 import {getFocusableElements} from '../hooks/useFocusTrap';
@@ -626,6 +629,27 @@ describe('BottomSheet', () => {
 
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(dialog).toHaveStyle({'--_sheet-scrim-opacity': '1'});
+  });
+
+  it("the internal Escape scope (Popover's non-modal sheet) takes Escape only while it holds", () => {
+    const onOpenChange = vi.fn();
+    let isInScope = false;
+    render(
+      <BottomSheetEscapeScopeContext value={() => isInScope}>
+        <BottomSheet isOpen onOpenChange={onOpenChange} label="Filters">
+          Content
+        </BottomSheet>
+      </BottomSheetEscapeScopeContext>,
+    );
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.keyDown(document.body, {key: 'Escape'});
+    fireEvent.keyDown(dialog, {key: 'Escape'});
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    isInScope = true;
+    fireEvent.keyDown(document.body, {key: 'Escape'});
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("the internal Escape gate (Popover's sheet) blocks Escape and the close request, not the scrim or swipe", () => {
