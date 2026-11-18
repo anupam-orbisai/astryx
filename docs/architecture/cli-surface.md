@@ -1136,7 +1136,7 @@ not resolve without an index file); writing an index file beside each scaffold
 
 A rendered page is one file that shows the page in any viewer, and a viewer
 that blocks the network cannot load an image the page names by its web
-address. So `astryx experimental render` fetches each image the page names by
+address. So `astryx experimental export` fetches each image the page names by
 an `https` address, once, while the page renders, and the file carries it.
 That is the only request a render makes for the page itself. A fetch sends no
 cookies or credentials and takes only an image, by its content type and its

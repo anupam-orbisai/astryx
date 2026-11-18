@@ -40,7 +40,8 @@ const MOST_REDIRECTS = 5;
  * socket at once: a stopped fetch whose connect is still going keeps the
  * process alive until the system gives up on the address. It sends no
  * cookies, credentials or referrer, keeps no connection open, and follows a
- * redirect only to an address of the same scheme.
+ * redirect only to an address of the same scheme that holds no user name or
+ * password (the client would send those as an Authorization header).
  * @param {string} href
  * @param {{signal?: AbortSignal | null, headers?: Record<string, string>}} [init]
  * @param {typeof https} [transport] another client for tests (node:http)
@@ -78,6 +79,17 @@ export function imageRequest(href, init = {}, transport = https) {
                 status,
                 url,
                 badLocation: true,
+                headers: {get: () => null},
+                body: null,
+              });
+              return;
+            }
+            if (next.username || next.password) {
+              resolve({
+                ok: false,
+                status,
+                url,
+                credentialsLocation: true,
                 headers: {get: () => null},
                 body: null,
               });
@@ -265,6 +277,9 @@ export function remoteImages({
     const stop = () => response.body?.cancel().catch(() => {});
     if (response.badLocation) {
       return {reason: 'it moved to an address that is not valid'};
+    }
+    if (response.credentialsLocation) {
+      return {reason: 'it moved to an address that holds a user name or password, which a render never sends'};
     }
     if (response.url && !response.url.startsWith('https:')) {
       stop();

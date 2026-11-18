@@ -299,6 +299,13 @@ describe('imageRequest', () => {
         res.end();
         return;
       }
+      if (req.url === '/userinfo') {
+        res.writeHead(302, {
+          location: `http://user:secret@${req.headers.host}/a.png`,
+        });
+        res.end();
+        return;
+      }
       res.writeHead(200, {'content-type': 'image/png'});
       res.end(PNG);
     });
@@ -334,6 +341,21 @@ describe('imageRequest', () => {
       ),
     ).toBe(true);
     expect(seen.at(-1)?.connection).toBe('close');
+  });
+
+  it('follows no redirect to an address that holds a user name or password, and sends none', async () => {
+    const before = seen.length;
+    const answer = await imageRequest(
+      `${base}/userinfo`,
+      {},
+      /** @type {any} */ (http),
+    );
+    expect(answer.ok).toBe(false);
+    expect(answer.credentialsLocation).toBe(true);
+    expect(seen.length - before).toBe(1);
+    expect(seen.every(headers => headers.authorization === undefined)).toBe(
+      true,
+    );
   });
 
   it('answers a redirect to an address that is not valid as such, and never throws', async () => {

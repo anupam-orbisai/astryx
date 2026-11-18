@@ -125,15 +125,13 @@ export function registerExperimentalExport(group, program) {
             scriptBytes: kb(d.scriptBytes),
             scriptModules: d.scriptModules,
           }),
+          // Each image not fetched prints its own `url` and `reason`, as the
+          // JSON's `remoteImages.failed` lists them.
           ...(d.remoteImages
             ? [
                 section('Remote images'),
-                record({
-                  ...(d.remoteImages.fetched.length > 0 ? {fetched: d.remoteImages.fetched.join(', ')} : {}),
-                  ...(d.remoteImages.failed.length > 0
-                    ? {notFetched: d.remoteImages.failed.map(f => `${f.url} (${f.reason})`).join(', ')}
-                    : {}),
-                }),
+                ...(d.remoteImages.fetched.length > 0 ? [record({fetched: d.remoteImages.fetched.join(', ')})] : []),
+                ...d.remoteImages.failed.map(f => record({url: f.url, reason: f.reason})),
               ]
             : []),
           ...(d.warnings.length > 0
