@@ -57,6 +57,8 @@ export {
 } from '../../foundation/discovery/icon-set-discovery.mjs';
 import {
   elementPropOrigins,
+  outermostElements,
+  resolveLocalModule,
   rendersElement,
 } from '../../foundation/discovery/module-exports.mjs';
 import {cssImports} from '../../foundation/render/embedded-imports.mjs';
@@ -237,15 +239,32 @@ export function readTextFileIfExists(file) {
  * links. The doctor parses the returned bytes without executing app code.
  * @param {string} root
  * @param {string} generatedModule
- * @param {{stylesheets?: boolean, pages?: boolean}} [options] - also list
- *   `.css` files, and `.html` pages
+ * @param {{stylesheets?: boolean, pages?: boolean, styleSources?: boolean}} [options] - also list
+ *   `.css` files, `.html` pages, and stylesheets a preprocessor compiles
+ *   (`.scss`, `.sass`, `.less`, `.styl`, `.pcss`, `.postcss`)
  */
 export function listProjectSourceFiles(root, generatedModule, options = {}) {
+  return walkProjectSourceFiles(root, generatedModule, options).files;
+}
+
+/** How many files the bounded project walk lists at most. */
+const PROJECT_FILE_LIMIT = 5000;
+
+/**
+ * The bounded app-source walk (see `listProjectSourceFiles`), with whether
+ * it read the whole project: `complete` is false when it stopped at its
+ * file limit with folders left unread.
+ * @param {string} root
+ * @param {string} generatedModule
+ * @param {Parameters<typeof listProjectSourceFiles>[2]} [options]
+ * @returns {{files: string[], complete: boolean}}
+ */
+export function walkProjectSourceFiles(root, generatedModule, options = {}) {
   /** @type {string[]} */
   const files = [];
   /** @type {string[]} */
   const queue = [root];
-  while (queue.length > 0 && files.length < 5000) {
+  while (queue.length > 0 && files.length < PROJECT_FILE_LIMIT) {
     const dir = /** @type {string} */ (queue.shift());
     let entries;
     try {
@@ -267,13 +286,20 @@ export function listProjectSourceFiles(root, generatedModule, options = {}) {
           (options.stylesheets === true &&
             path.extname(entry.name) === '.css') ||
           (options.pages === true &&
-            /^\.html?$/u.test(path.extname(entry.name))))
+            /^\.html?$/u.test(path.extname(entry.name))) ||
+          (options.styleSources === true &&
+            /^\.(?:scss|sass|less|styl|pcss|postcss)$/u.test(
+              path.extname(entry.name),
+            )))
       ) {
         files.push(file);
       }
     }
   }
-  return files;
+  return {
+    files,
+    complete: queue.length === 0 && files.length < PROJECT_FILE_LIMIT,
+  };
 }
 
 /**
@@ -457,6 +483,75 @@ export function realDoctorFile(file) {
  */
 export function doctorElementPropOrigins(file, element) {
   return elementPropOrigins(file, element);
+}
+
+/** @type {Promise<{parseColor: (value: unknown) => [number, number, number] | null, hex: (rgb: [number, number, number]) => string, luminance: (hex: string) => number}> | undefined} */
+let colorReaders;
+
+/**
+ * The shared color parser and luminance, loaded on first use: the editor's
+ * color module reads the bundled themes when it loads, which a plain import
+ * of the CLI's API must not pay for.
+ */
+export function doctorColorReaders() {
+  colorReaders ??= Promise.all([
+    import('../theme-edit/_color.mjs'),
+    import('../theme/palette/generate/color.mjs'),
+  ]).then(([color, generate]) => ({
+    parseColor: /** @type {any} */ (color.parseColor),
+    hex: /** @type {any} */ (color.hex),
+    luminance: generate.luminance,
+  }));
+  return colorReaders;
+}
+
+/**
+ * The stylesheets an installed package ships, two folders deep, its own
+ * dependencies left out.
+ * @param {string} packageDir
+ * @returns {string[]}
+ */
+export function doctorPackageStylesheets(packageDir) {
+  /** @type {string[]} */
+  const out = [];
+  /** @param {string} folder @param {number} depth */
+  const read = (folder, depth) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(folder, {withFileTypes: true});
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules') continue;
+      const file = path.join(folder, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < 2) read(file, depth + 1);
+      } else if (entry.name.endsWith('.css')) out.push(file);
+    }
+  };
+  read(packageDir, 0);
+  return out.sort();
+}
+
+/**
+ * A relative import's file, as a bundler resolves it (see
+ * `resolveLocalModule`), or null.
+ * @param {string} specifier
+ * @param {string} fromFile
+ */
+export function doctorResolveLocalModule(specifier, fromFile) {
+  return resolveLocalModule(specifier, fromFile, {bundler: true});
+}
+
+/**
+ * Each outermost element a module renders, imported by name from a module,
+ * as its JSX element node (see `outermostElements`).
+ * @param {string} file
+ * @param {Parameters<typeof outermostElements>[1]} element
+ */
+export function doctorOutermostElements(file, element) {
+  return outermostElements(file, element);
 }
 
 /**
