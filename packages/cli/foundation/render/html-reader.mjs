@@ -29,8 +29,11 @@ export const decode = s =>
     .replace(/&nbsp;/g, '\u00a0')
     .replace(/&amp;/g, '&');
 
-/** Elements whose content is raw text: a tag or a comment opener in it is text. */
-export const RAW_TEXT = new Set(['script', 'style', 'textarea', 'title']);
+/**
+ * Elements whose content is raw text up to their own end tag, as a browser's
+ * tokenizer reads them: a tag or a comment opener in it is text.
+ */
+export const RAW_TEXT = new Set(['script', 'style', 'textarea', 'title', 'iframe', 'xmp', 'noembed', 'noframes']);
 
 /**
  * One piece of an HTML document, by its place in the text. `raw` is the
@@ -104,9 +107,12 @@ export function readTag(html, i) {
 /**
  * Split an HTML document into its pieces, in order, as a browser does for
  * the markup a render writes. A comment ends at the first `-->` after its
- * `<!--` (so `<!-->` and `<!--->` are whole comments), or at the end. The
- * content of a raw-text element up to its end tag is one `raw` piece, so a
- * tag or a comment in a stylesheet is text. A `<` that starts no tag is
+ * `<!--` (so `<!-->` and `<!--->` are whole comments), or at the end. A bogus
+ * comment (`<?…`, a `<!` that starts no comment or doctype, or `</` before a
+ * character that is not a letter) is a comment to the next `>`. The content
+ * of a raw-text element up to its end tag is one `raw` piece, so a tag or a
+ * comment in a stylesheet is text; `<plaintext>` makes the rest of the
+ * document one `raw` piece. A `<` that starts no tag is
  * text, and a tag that no `>` ends makes the rest text. Each character is
  * read a fixed number of times, so the time grows with the document's length.
  * @param {string} html
@@ -130,6 +136,9 @@ export function* scanHtml(html) {
       const close = html.indexOf('>', lt);
       if (close < 0) break;
       token = {kind: 'doctype', start: lt, end: close + 1};
+    } else if (next === '?' || next === '!' || (next === '/' && !LETTER.test(html[lt + 2] ?? '') && lt + 2 < n)) {
+      const close = html.indexOf('>', lt + 2);
+      token = {kind: 'comment', start: lt, end: close < 0 ? n : close + 1};
     } else if (LETTER.test(next) || (next === '/' && LETTER.test(html[lt + 2] ?? ''))) {
       const closing = next === '/';
       const read = readTag(html, lt + (closing ? 2 : 1));
@@ -147,6 +156,10 @@ export function* scanHtml(html) {
     if (lt > text) yield {kind: 'text', start: text, end: lt};
     yield token;
     at = text = token.end;
+    if (token.kind === 'start' && token.tag === 'plaintext') {
+      if (at < n) yield {kind: 'raw', start: at, end: n};
+      return;
+    }
     // A self-closing raw-text element (an SVG `<title />`) holds nothing.
     if (token.kind === 'start' && RAW_TEXT.has(token.tag) && !token.selfClosing) {
       const closing = new RegExp(`</${token.tag}`, 'gi');

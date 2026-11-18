@@ -12,7 +12,7 @@ import {performance} from 'node:perf_hooks';
 import {describe, expect, it} from 'vitest';
 import {classesIn, cutCss, layerOrderOf, requiredClasses} from './css-cut.mjs';
 import {RENDER_FORMAT, readSourceBlock, renderedHeadOf, renderedMarkupOf, sourceBlock} from './source-block.mjs';
-import {isAstryxMarkup, parseHtml} from './html-reader.mjs';
+import {isAstryxMarkup, parseHtml, scanHtml} from './html-reader.mjs';
 import {CARRY_ATTR, renderPage, withCarriedPaths, withUncarriedImages} from './render-page.mjs';
 import {carriedNameFor, embeddedPathProblem} from './embedded-files.mjs';
 import {makeLinkedFixture, removeLinkedFixture} from '../../test-utils/linked-fixture.mjs';
@@ -315,5 +315,24 @@ describe('a name that reads as configuration', () => {
   it('is not the reason a runner file or a dotfile is left out', () => {
     expect(embeddedPathProblem('a.config.test.ts')?.toolConfig).toBeUndefined();
     expect(embeddedPathProblem('.tool/x.config.json')?.toolConfig).toBeUndefined();
+  });
+});
+
+describe('scanHtml', () => {
+  /** @param {string} html */
+  const pieces = html => [...scanHtml(html)].map(t => `${t.kind}:${html.slice(t.start, t.end)}`);
+
+  it('reads the content of iframe, xmp, noembed and noframes as raw text, and everything after plaintext', () => {
+    for (const tag of ['iframe', 'xmp', 'noembed', 'noframes']) {
+      expect(pieces(`<${tag}><img src="a.png"></${tag}><b>`)).toEqual([`start:<${tag}>`, 'raw:<img src="a.png">', `end:</${tag}>`, 'start:<b>']);
+    }
+    expect(pieces('<plaintext><img src="a.png"></plaintext><b>')).toEqual(['start:<plaintext>', 'raw:<img src="a.png"></plaintext><b>']);
+  });
+
+  it('reads a bogus comment to the next >', () => {
+    expect(pieces('<?php x ?><b>')).toEqual(['comment:<?php x ?>', 'start:<b>']);
+    expect(pieces('<!x <img src="a.png"><b>')).toEqual(['comment:<!x <img src="a.png">', 'start:<b>']);
+    expect(pieces('</ <img src="a.png"><b>')).toEqual(['comment:</ <img src="a.png">', 'start:<b>']);
+    expect(pieces('a < b')).toEqual(['text:a < b']);
   });
 });

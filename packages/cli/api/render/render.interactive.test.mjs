@@ -449,6 +449,29 @@ export default function Page() {
 `,
     );
     put(
+      'src/shapes/raw-elements.tsx',
+      `const PATH = './photo.png';
+const IMG = '<img src="./photo.png" alt="Quoted">';
+const SHAPES = [
+  \`<iframe>\${IMG}</iframe>\`,
+  \`<xmp>\${IMG}</xmp>\`,
+  \`<noembed>\${IMG}</noembed>\`,
+  \`<noframes>\${IMG}</noframes>\`,
+  \`<?php \${IMG} ?>\`,
+  \`<!bogus \${IMG}>\`,
+  \`</ \${IMG}>\`,
+];
+export default function Page() {
+  return (
+    <main>
+      {SHAPES.map(html => <div key={html} dangerouslySetInnerHTML={{__html: html}} />)}
+      <p>{typeof document === 'undefined' ? '' : <img src={PATH} alt="Drawn" />}</p>
+    </main>
+  );
+}
+`,
+    );
+    put(
       'src/shapes/only-noscript.tsx',
       `const PATH = './photo.png';
 export default function Page() {
@@ -461,7 +484,7 @@ export default function Page() {
 }
 `,
     );
-    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html'], ['src/shapes/nested-template.tsx', 'nested-template.html'], ['src/shapes/comment-textarea.tsx', 'comment-textarea.html']]) {
+    for (const [page, out] of [['src/shapes/page.tsx', 'shapes.html'], ['src/shapes/only-noscript.tsx', 'only-noscript.html'], ['src/shapes/nested-template.tsx', 'nested-template.html'], ['src/shapes/comment-textarea.tsx', 'comment-textarea.html'], ['src/shapes/raw-elements.tsx', 'raw-elements.html']]) {
       await render(page, {cwd: dir, out});
     }
     /** @param {string} file */
@@ -497,6 +520,11 @@ export default function Page() {
     // Nor does one inside a comment or a <textarea>'s text.
     const quoted = await drawn('comment-textarea.html');
     expect(quoted.drawn).toMatch(/^data:image\/png;base64,/);
+    // Nor inside <iframe>, <xmp>, <noembed> or <noframes> text, or a bogus
+    // comment (<?…>, <!…>, </ …>).
+    expect(read('raw-elements.html')).not.toContain(CARRY_ATTR);
+    const raw = await drawn('raw-elements.html');
+    expect(raw.drawn).toMatch(/^data:image\/png;base64,/);
   }, 120_000);
 
   it("keeps the first paint when the page's script throws", async () => {

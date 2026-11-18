@@ -1056,8 +1056,9 @@ function inlineAssets(text, kind, ctx) {
 
 /**
  * Where `text` holds markup a browser running scripts never makes elements
- * of, as [start, end] pairs: a comment, the text of a raw-text element
- * (`<textarea>`, `<title>`, `<style>`, `<script>`), and each outermost
+ * of, as [start, end] pairs: a comment (a bogus one too), the text of a
+ * raw-text element (`<textarea>`, `<iframe>`, `<xmp>` and the others the
+ * scanner names, everything after `<plaintext>`), and each outermost
  * `<noscript>` or `<template>`, which runs to its own close tag past any
  * nested in it. The pieces are the HTML scanner's own.
  * @param {string} text
