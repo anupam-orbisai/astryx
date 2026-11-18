@@ -234,7 +234,9 @@ export default function Page() {
       <span id="big" />
       <span id="café" />
       <span id="100%" />
+      <button id="opener" onClick={() => setHash('opened')}>Opener</button>
       <a href="#big">Big only</a>
+      <a href="#café" onClick={() => document.getElementById('opener')?.click()}>Open then go</a>
       <a href="#café">Café</a>
       <a href="#100%">Hundred</a>
       <a href="#">All</a>
@@ -299,6 +301,15 @@ export default function Page() {
     click('Big only');
     await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     expect(dom.window.location.hash).toBe('#big');
+    // A link whose own handler clicks another element first still moves
+    // inside the file once its own click reaches the window.
+    click('Big only');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(click('Open then go').defaultPrevented).toBe(true);
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
+    expect(dom.window.location.href).toBe('about:srcdoc#caf%C3%A9');
+    click('Big only');
+    await new Promise(resolve => dom.window.setTimeout(resolve, 20));
     // A listener the page adds on the window after the file's script still
     // cancels the move.
     const cancel = (/** @type {Event} */ e) => e.preventDefault();

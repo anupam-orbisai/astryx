@@ -103,6 +103,10 @@ window.addEventListener('click', event => {
   const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
   if (link && link.getAttribute('href').trim().startsWith('#')) {
     const last = later => {
+      // A click the page dispatches while this one is still on its way (a
+      // handler that clicks another element first) leaves it waiting; one
+      // after it finished means a handler stopped it before the window.
+      if (later !== event && event.eventPhase !== Event.NONE) return;
       window.removeEventListener('click', last);
       if (later === event) moveToPlace(event);
     };
