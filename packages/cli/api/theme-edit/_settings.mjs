@@ -8101,8 +8101,7 @@ function barReach(ctx, theme, data) {
       const sides = blockSides(
         prop =>
           pads.length
-            ? (b[prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] ??
-              null)
+            ? (b[prop.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] ?? null)
             : drawnValue(map[holder], prop),
         'padding',
       ).filter(v => v != null && !/^0(px|rem|em)?$/.test(String(v).trim()));
@@ -11842,11 +11841,16 @@ function barFitProblems(ctx, data, res) {
   /** @param {string | null} v */
   const len = v => (v == null ? 0 : (pxOf(v) ?? 0));
   /** @param {(prop: string) => string | null} get */
-  const padSum = get => blockSides(get, 'padding').reduce((a, v) => a + len(v), 0);
+  const padSum = get =>
+    blockSides(get, 'padding').reduce((a, v) => a + len(v), 0);
   /** @param {string} part */
   const ownsPadding = part =>
     BLOCK_PADDING_KEYS.some(
-      k => own(part, k.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`)) != null,
+      k =>
+        own(
+          part,
+          k.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`),
+        ) != null,
     );
   /** @type {ThemeProblem[]} */
   const out = [];
@@ -13815,6 +13819,66 @@ export function paddedParts(ctx, part) {
       Object.keys(ctx.C.MAP[t]?.own ?? {}).some(k => /^padding/.test(k)),
   );
   return inner.length ? inner : [part];
+}
+
+/**
+ * The square a member of the checks group sizes itself (a checkbox's box, a
+ * radio's circle), at a size: its width and height in px, from the theme's
+ * latest plain setting of each on the part or a group it is in (a setting
+ * for that size counts too), else what the part data records Core drawing at
+ * that size. Null for a part outside the checks group, one that reads a size
+ * token or sets no width and height of its own, and for a size neither the
+ * theme nor the part data gives in px.
+ * @param {any} C the part census
+ * @param {Setting[]} settings the theme's settings, in order
+ * @param {string} part
+ * @param {string} [size] the size value (`md`); none: the size drawn
+ * @returns {{w: number, h: number} | null}
+ */
+export function selfSizedBox(C, settings, part, size) {
+  if (!(FAMILIES.checks ?? []).includes(part)) return null;
+  if ((C.partReads(part, 'size') ?? []).length) return null;
+  const at = C.MAP[part]?.at ?? {};
+  if (!Object.hasOwn(at, 'width') || !Object.hasOwn(at, 'height')) return null;
+  const ons = [
+    part,
+    ...Object.keys(FAMILIES).filter(g => FAMILIES[g].includes(part)),
+  ];
+  /** @param {unknown} v */
+  const px = v => {
+    const m = /^\s*(\d*\.?\d+)px\s*$/.exec(String(v));
+    return m ? Number(m[1]) : null;
+  };
+  /** @param {string} k */
+  const core = k => {
+    const rows = Object.entries(at[k] ?? {}).filter(
+      ([cond, v]) =>
+        !/:/.test(cond) &&
+        px(v) != null &&
+        (size == null || cond.split(',').includes(`size=${size}`)),
+    );
+    rows.sort((a, b) => a[0].split(',').length - b[0].split(',').length);
+    return rows[0] ? px(rows[0][1]) : null;
+  };
+  /** @param {string} k */
+  const own = k => {
+    const st = [...settings]
+      .reverse()
+      .find(
+        x =>
+          x.thing === k &&
+          ons.includes(String(x.on)) &&
+          !x.state &&
+          !x.mode &&
+          (!x.when || (size != null && x.when === `size:${size}`)),
+      );
+    return st ? {v: px(st.value)} : null;
+  };
+  const ow = own('width');
+  const oh = own('height');
+  const w = ow ? ow.v : core('width');
+  const h = oh ? oh.v : core('height');
+  return w != null && h != null ? {w, h} : null;
 }
 
 /**
